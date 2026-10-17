@@ -21,7 +21,11 @@ export const config = {
     process.env.RENDER_EXTERNAL_URL ||
     "http://localhost:3100",
   port: Number(process.env.PORT || 3100),
-  host: process.env.HOST || "127.0.0.1",
+  host:
+    process.env.HOST ||
+    (process.env.NODE_ENV === "production" || process.env.RENDER === "true"
+      ? "0.0.0.0"
+      : "127.0.0.1"),
   secret: process.env.SESSION_SECRET || "",
   hostedSetupToken: process.env.HOSTED_SETUP_TOKEN || "",
   encryption: process.env.INTEGRATION_ENCRYPTION_KEY || "",
