@@ -158,7 +158,7 @@ async function createSession(res: Response, u: any) {
   });
   return { user: publicUser(u), csrf };
 }
-async function checkCode(u: any, code: string) {
+async function checkCode(u: any, code: string, database = db) {
   const totp = new OTPAuth.TOTP({
     secret: OTPAuth.Secret.fromBase32(decrypt(u.totp)),
     algorithm: "SHA1",
@@ -169,7 +169,7 @@ async function checkCode(u: any, code: string) {
   const candidate = digest(code);
   if (!u.recovery.includes(candidate)) return false;
   // Atomic consumption prevents the same recovery code from being used concurrently.
-  const updated = await db
+  const updated = await database
     .update(users)
     .set({ recovery: u.recovery.filter((x: string) => x !== candidate) })
     .where(and(eq(users.id, u.id), eq(users.recovery, u.recovery)))
@@ -265,6 +265,7 @@ authRouter.post("/register", limiter, csrf, async (req, res) => {
       email: z.email().transform((x) => x.toLowerCase()),
       name: z.string().min(1).max(80),
       password,
+      code: z.string().max(128).optional(),
     })
     .parse(req.body);
   const u = await db.transaction(async (tx: any) => {
@@ -308,10 +309,23 @@ authRouter.post("/register", limiter, csrf, async (req, res) => {
     } else if (invite.email !== b.email)
       throw new AppError(400, "Use the invited email address");
     const [existing] = await tx
-      .select({ id: users.id })
+      .select()
       .from(users)
       .where(eq(users.email, b.email))
       .limit(1);
+    if (existing && invite.email === "bootstrap") {
+      if (existing.suspended || !(await verify(existing.password, b.password)))
+        throw new AppError(401, "Use this existing account's current password to finish owner setup.");
+      if (existing.totp && (!b.code || !(await checkCode(existing, b.code, tx))))
+        throw new AppError(401, "A valid two-factor or recovery code is required");
+      const [claimed] = await tx.update(users).set({
+        role: "owner",
+        permissions: ["*"],
+        servers: [config.server],
+      }).where(eq(users.id, existing.id)).returning();
+      await tx.delete(sessions).where(eq(sessions.userId, existing.id));
+      return claimed;
+    }
     if (existing)
       throw new AppError(
         409,

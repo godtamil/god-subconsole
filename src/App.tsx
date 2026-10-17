@@ -298,7 +298,8 @@ export default function App() {
         <p>Opening your console…</p>
       </div>
     );
-  if (!user) return <Auth onLogin={setUser} />;
+  if (!user || new URLSearchParams(location.hash.slice(1)).has("setup"))
+    return <Auth onLogin={setUser} />;
   const status = overview?.resources?.current_state || "unavailable";
   const stale =
     !!overview?.updatedAt &&

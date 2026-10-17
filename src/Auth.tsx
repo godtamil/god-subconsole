@@ -134,7 +134,7 @@ export default function Auth({ onLogin }: { onLogin: (user: any) => void }) {
             {mode === "register" || mode === "signup"
               ? invite
                 ? ownerSetup
-                  ? "Set up the first owner for this website. Use an email that has not signed up here yet."
+                  ? "Set up the first owner for this website. If you already signed up, enter that email and its current password."
                   : "Create your invited account to continue."
                 : "Join GOD SUBCONSOLE. Server access requires owner approval."
               : "Your server is one sign-in away."}
@@ -204,7 +204,7 @@ export default function Auth({ onLogin }: { onLogin: (user: any) => void }) {
                 />
               </label>
             )}
-            {mode === "login" && (
+            {(mode === "login" || (ownerSetup && mode === "register")) && (
               <label>
                 Authenticator or recovery code{" "}
                 <span className="muted">if enabled</span>
