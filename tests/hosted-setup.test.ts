@@ -47,6 +47,17 @@ describe("protected hosted owner setup", () => {
       });
     expect(r.status).toBe(400);
   });
+  it("explains duplicate signup emails without consuming owner setup", async () => {
+    const r = await http
+      .post("/api/auth/register")
+      .set("Origin", config.app)
+      .send({ email: "waiting@example.test", name: "Waiting member", password, token: setupToken });
+    expect(r.status).toBe(409);
+    expect(r.body.error).toContain("email already exists");
+    expect((await http.get("/api/auth/status")).body.setupRequired).toBe(true);
+    const [existing] = await db.select().from(users).where(eq(users.email, "waiting@example.test"));
+    expect(existing.role).toBe("viewer");
+  });
   it("permits exactly one owner when setup submissions race", async () => {
     const requests = ["first", "second"].map((name) =>
       http

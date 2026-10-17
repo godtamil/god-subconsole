@@ -307,6 +307,16 @@ authRouter.post("/register", limiter, csrf, async (req, res) => {
         throw new AppError(409, "Owner has already been created");
     } else if (invite.email !== b.email)
       throw new AppError(400, "Use the invited email address");
+    const [existing] = await tx
+      .select({ id: users.id })
+      .from(users)
+      .where(eq(users.email, b.email))
+      .limit(1);
+    if (existing)
+      throw new AppError(
+        409,
+        "An account with this email already exists. Create the owner with an email that has not signed up yet.",
+      );
     const [created] = await tx
       .insert(users)
       .values({
