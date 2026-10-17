@@ -6,6 +6,7 @@ export default function Auth({ onLogin }: { onLogin: (user: any) => void }) {
   const hash = new URLSearchParams(location.hash.slice(1));
   const invite = hash.get("setup") || hash.get("invite"),
     reset = hash.get("reset");
+  const ownerSetup = hash.has("setup");
   const [mode, setMode] = useState(
       reset ? "reset" : invite ? "register" : "login",
     ),
@@ -120,7 +121,9 @@ export default function Auth({ onLogin }: { onLogin: (user: any) => void }) {
           </div>
           <h2>
             {mode === "register" || mode === "signup"
-              ? "Create your account"
+              ? ownerSetup && mode === "register"
+                ? "Create owner account"
+                : "Create your account"
               : mode === "forgot"
                 ? "Recover your account"
                 : mode === "reset"
@@ -130,7 +133,9 @@ export default function Auth({ onLogin }: { onLogin: (user: any) => void }) {
           <p>
             {mode === "register" || mode === "signup"
               ? invite
-                ? "Create your invited account to continue."
+                ? ownerSetup
+                  ? "Set up the first owner for this website. Use an email that has not signed up here yet."
+                  : "Create your invited account to continue."
                 : "Join GOD SUBCONSOLE. Server access requires owner approval."
               : "Your server is one sign-in away."}
           </p>
@@ -221,7 +226,9 @@ export default function Auth({ onLogin }: { onLogin: (user: any) => void }) {
                 : mode === "login"
                   ? "Sign in to your console"
                   : mode === "register" || mode === "signup"
-                    ? "Create new account"
+                    ? ownerSetup && mode === "register"
+                      ? "Create owner account"
+                      : "Create new account"
                     : mode === "forgot"
                       ? "Send recovery email"
                       : "Update password"}
@@ -263,8 +270,10 @@ export default function Auth({ onLogin }: { onLogin: (user: any) => void }) {
             </button>
           )}
           <div className="auth-note">
-            <ShieldCheck size={14} /> New accounts require approval for server
-            access.
+            <ShieldCheck size={14} />
+            {ownerSetup && mode === "register"
+              ? "Owner setup grants management access to this website."
+              : "New accounts require approval for server access."}
           </div>
         </section>
       </div>
