@@ -1,0 +1,37 @@
+# No paid service or Render database is created by this Blueprint.
+# Use an external Neon Free PostgreSQL database for durable accounts.
+services:
+  - type: web
+    name: god-subconsole
+    runtime: node
+    plan: free
+    buildCommand: npm ci --include=dev && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_VERSION
+        value: 24.21.0
+      - key: NODE_ENV
+        value: production
+      - key: HOST
+        value: 0.0.0.0
+      - key: DATABASE_URL
+        sync: false
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: INTEGRATION_ENCRYPTION_KEY
+        generateValue: true
+      - key: HOSTED_SETUP_TOKEN
+        generateValue: true
+      - key: PTERODACTYL_PANEL_URL
+        value: https://dash.pulikesiyt.fun
+      - key: PTERODACTYL_CLIENT_API_KEY
+        sync: false
+      - key: PTERODACTYL_SERVER_ID
+        value: 9846e0b6
+      - key: PTERODACTYL_WS_HOSTS
+        value: paid-1.pulikesiyt.fun
+      - key: ALLOW_SIGNUP
+        value: "true"
+      - key: GAME_JOIN_ADDRESS
+        value: godtamilsmp.chickenkiller.com:25568
