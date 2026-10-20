@@ -1,0 +1,31 @@
+:root { --accent: #3985ff; --muted: #91a9cc; }
+body { background: #040916; }
+.ambient-scene { position: fixed; inset: 0; pointer-events: none; z-index: -1; overflow: hidden; background: radial-gradient(ellipse at 85% 12%, #10396b66, transparent 52%), #040916; }
+.ambient-orb { position: absolute; width: 60vw; height: 60vw; right: -15vw; top: -30vw; border-radius: 50%; background: radial-gradient(circle, #087cff25, transparent 65%); animation: orbit-blue 20s ease-in-out infinite alternate; }
+.ambient-grid { position: absolute; inset: 0; background-image: linear-gradient(#2863ac0a 1px, transparent 1px), linear-gradient(90deg, #2863ac0a 1px, transparent 1px); background-size: 64px 64px; mask-image: linear-gradient(transparent, #000 90%); }
+.app { background: transparent; }
+.sidebar { background: linear-gradient(180deg, #09152af5, #060c1cf5); border-right-color: #21457480; }
+.topbar { background: #071022e8; backdrop-filter: blur(16px); border-bottom-color: #21457480; }
+.panel, .resource-card, .server-hero, .auth-card { border-color: #27558b66; box-shadow: 0 10px 38px #0003, inset 0 1px #8dc5ff08; }
+.resource-card { background: linear-gradient(145deg, #11213c, #0a1428); transition: border-color .25s, box-shadow .25s, transform .25s; }
+.resource-card:hover { transform: translateY(-3px); border-color: #458cdbb0; box-shadow: 0 8px 30px #107aff18; }
+button { transition: border-color .18s, box-shadow .18s, background .18s, transform .18s; }
+button:active:not(:disabled) { transform: translateY(1px); }
+button.primary { background: linear-gradient(115deg, #2563eb, #1686df); border-color: #56a9ff88; box-shadow: 0 3px 18px #087cff24; }
+button.primary:hover:not(:disabled) { box-shadow: 0 4px 24px #1686ff55; }
+button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid #66caff; outline-offset: 3px; }
+.auth-page { background: transparent; position: relative; isolation: isolate; }
+.auth-page::before { content: ""; position: absolute; inset: 0; z-index: -1; background: radial-gradient(ellipse at 25% 45%, #07428f36, transparent 62%); }
+.auth-pitch { position: relative; }
+.auth-pitch::before { content: ""; position: absolute; width: min(400px, 90%); height: 400px; inset: auto 0 -75px auto; background: url('/god-smp.png') center / contain no-repeat; opacity: .13; mix-blend-mode: screen; pointer-events: none; mask-image: linear-gradient(#000 50%, transparent); }
+.auth-card { background: linear-gradient(145deg, #101f39ed, #091325f5); animation: panel-arrive .65s cubic-bezier(.2,.7,.2,1) both; }
+.auth-grid-art { opacity: .28; }
+.sound-toggle { position: fixed; right: 18px; bottom: 16px; z-index: 75; display: flex; align-items: center; gap: 7px; padding: 8px 12px; min-height: 36px; border-radius: 24px; background: #0a1933ee; color: #9dcaff; border: 1px solid #315b86; box-shadow: 0 4px 20px #0005; font-size: 11px; }
+.page-enter { animation: panel-arrive .4s cubic-bezier(.2,.7,.2,1) both; padding-bottom: 64px; }
+.console-enter { animation: console-arrive .65s cubic-bezier(.16,1,.3,1) both; }
+.console-enter .console-panel { box-shadow: 0 0 32px #168bff13; }
+@keyframes panel-arrive { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes console-arrive { from { opacity: 0; transform: translateY(16px) scale(.992); } to { opacity: 1; transform: translateY(0) scale(1); } }
+@keyframes orbit-blue { to { transform: translate(-10vw, 10vh); } }
+@media (max-width: 700px) { .sound-toggle { right: 12px; bottom: 12px; } .auth-pitch::before { opacity: .08; } }
+@media (prefers-reduced-motion: reduce) { .ambient-orb, .auth-card, .page-enter, .console-enter { animation: none; } button, .resource-card { transition: none; } .resource-card:hover, button:active:not(:disabled) { transform: none; } }

@@ -525,7 +525,7 @@ export default function App() {
             </button>
           </div>
         )}
-        <main>
+        <main key={page} className={page === "console" ? "page-enter console-enter" : "page-enter"}>
           {!user.servers.length && page !== "account" ? (
             <section className="panel approval-panel">
               <ShieldCheck size={40} />

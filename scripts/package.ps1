@@ -4,7 +4,7 @@ $projectRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 if (-not $Destination) { $Destination = Join-Path ([IO.Path]::GetDirectoryName($projectRoot)) 'GOD-SUBCONSOLE-UPDATED-2026-10-17.zip' }
 $Destination = [IO.Path]::GetFullPath($Destination)
 if (Test-Path -LiteralPath $Destination) { throw 'Destination already exists. Choose a new ZIP filename.' }
-$sources = @('src','server','shared','migrations','scripts','tests','docs','dist','package.json','package-lock.json','tsconfig.json','vite.config.ts','render.yaml','index.html','README.md','setup.ps1','.env.example','.gitignore','.dockerignore')
+$sources = @('src','public','server','shared','migrations','scripts','tests','docs','dist','package.json','package-lock.json','tsconfig.json','vite.config.ts','render.yaml','index.html','README.md','setup.ps1','.env.example','.gitignore','.dockerignore')
 Add-Type -AssemblyName System.IO.Compression
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 $stream = [IO.File]::Open($Destination, [IO.FileMode]::CreateNew)
