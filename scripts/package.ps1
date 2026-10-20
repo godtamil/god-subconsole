@@ -15,7 +15,8 @@ try {
         $item = Get-Item -LiteralPath $sourcePath
         $files = if ($item.PSIsContainer) { Get-ChildItem -LiteralPath $sourcePath -File -Recurse } else { @($item) }
         foreach ($file in $files) {
-            $relative = [IO.Path]::GetRelativePath($projectRoot, $file.FullName).Replace('\','/')
+            if (-not $file.FullName.StartsWith($projectRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) { throw 'Package file is outside project root' }
+            $relative = $file.FullName.Substring($projectRoot.Length + 1).Replace('\','/')
             if ($relative -match '(^|/)(\.env|\.data|node_modules)(/|$)' -or $relative -match 'qa-(browser|seed)') { throw 'Unexpected private file in package source' }
             [IO.Compression.ZipFileExtensions]::CreateEntryFromFile($archive, $file.FullName, 'god-subconsole/' + $relative, [IO.Compression.CompressionLevel]::Optimal) | Out-Null
         }
