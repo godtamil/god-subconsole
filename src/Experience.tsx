@@ -33,7 +33,7 @@ export default function Experience() {
   }, [sound]);
   useEffect(() => () => { void audio.current?.close(); audio.current = null; }, []);
   return <>
-    <div className="ambient-scene" aria-hidden="true"><div className="ambient-orb" /><div className="ambient-grid" /></div>
+    <div className="ambient-scene" aria-hidden="true"><div className="ambient-orb" /><div className="ambient-grid" /><div className="ambient-streak streak-one" /><div className="ambient-streak streak-two" /><div className="ambient-streak streak-three" /></div>
     <button className="sound-toggle" aria-label={sound ? "Mute interface sounds" : "Enable interface sounds"} aria-pressed={sound} onClick={() => setSound(!sound)}>
       {sound ? <Volume2 size={15} /> : <VolumeX size={15} />}<span>Sound {sound ? "on" : "off"}</span>
     </button>

@@ -61,6 +61,7 @@ export default function Auth({ onLogin }: { onLogin: (user: any) => void }) {
       </div>
       <div className="auth-layout">
         <section className="auth-pitch">
+          <div className="theme-edition">GOD SMP <span> / ELECTRIC BLUE</span></div>
           <div className="eyebrow">
             <span /> MINECRAFT SERVER CONTROL
           </div>
@@ -82,6 +83,11 @@ export default function Auth({ onLogin }: { onLogin: (user: any) => void }) {
             <div />
             <div />
             <div />
+          </div>
+          <div className="lion-stage" aria-hidden="true">
+            <div className="lion-orbit" />
+            <img src="/god-smp.png" alt="" />
+            <span className="lion-caption">YOUR KINGDOM. YOUR CONSOLE.</span>
           </div>
           <div className="auth-trust">
             <ShieldCheck size={18} /> Private sessions · Server-side credentials
