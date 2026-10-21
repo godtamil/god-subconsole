@@ -38,6 +38,9 @@ export default function Auth({ onLogin }: { onLogin: (user: any) => void }) {
       });
       if (r.user) {
         setCsrf(r.csrf);
+        window.dispatchEvent(new Event("god:entry"));
+        if (!matchMedia("(prefers-reduced-motion: reduce)").matches)
+          await new Promise(resolve => setTimeout(resolve, 650));
         history.replaceState(null, "", location.pathname);
         onLogin(r.user);
       } else {
@@ -61,7 +64,7 @@ export default function Auth({ onLogin }: { onLogin: (user: any) => void }) {
       </div>
       <div className="auth-layout">
         <section className="auth-pitch">
-          <div className="theme-edition">GOD SMP <span> / ELECTRIC BLUE</span></div>
+          <div className="theme-edition">GOD SMP <span> / MIDNIGHT BUBBLE</span></div>
           <div className="eyebrow">
             <span /> MINECRAFT SERVER CONTROL
           </div>
@@ -142,10 +145,10 @@ export default function Auth({ onLogin }: { onLogin: (user: any) => void }) {
                 ? ownerSetup
                   ? "Set up the first owner for this website. If you already signed up, enter that email and its current password."
                   : "Create your invited account to continue."
-                : "Join GOD SUBCONSOLE. Server access requires owner approval."
+                : status?.sharedControl ? "Create an account and step into your shared server workspace." : "Join GOD SUBCONSOLE. Server access requires owner approval."
               : "Your server is one sign-in away."}
           </p>
-          {status?.setupRequired && mode === "login" && (
+          {status?.setupRequired && !status?.sharedControl && mode === "login" && (
             <div className="notice">
               Owner setup is required. Run <code>npm run bootstrap</code> in the
               project folder, then open the one-time link printed in your
@@ -279,7 +282,7 @@ export default function Auth({ onLogin }: { onLogin: (user: any) => void }) {
             <ShieldCheck size={14} />
             {ownerSetup && mode === "register"
               ? "Owner setup grants management access to this website."
-              : "New accounts require approval for server access."}
+              : status?.sharedControl ? "Every member gets server controls. Credentials stay protected." : "New accounts require approval for server access."}
           </div>
         </section>
       </div>

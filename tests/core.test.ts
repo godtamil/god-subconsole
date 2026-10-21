@@ -39,6 +39,7 @@ vi.mock("../server/panel", async () => {
       meta: { is_server_owner: true, user_permissions: ["*"] },
     })),
     sanitizeDetails: (d: any) => d.attributes,
+    externalFetch: vi.fn(async () => new Response("", {status:200})),
   };
 });
 const { db, migrate, closeDb } = await import("../server/db");
@@ -55,7 +56,7 @@ const {
 } = await import("../server/security");
 const { createApp } = await import("../server/app");
 const { config } = await import("../server/config");
-const { panel, upstreamPermission } = await import("../server/panel");
+const { panel, upstreamPermission, externalFetch } = await import("../server/panel");
 const { attachRelay } = await import("../server/relay");
 const { eq } = await import("drizzle-orm");
 const { hash } = await import("@node-rs/argon2");
@@ -104,6 +105,74 @@ beforeAll(async () => {
   viewerCsrf = viewer.body.csrf;
 }, 30000);
 afterAll(closeDb);
+describe("shared server control and integration privacy", () => {
+  it("gives existing signed-in members server control without account administration", async () => {
+    config.sharedControl = true;
+    try {
+      const me = await http.get("/api/auth/me").set("Cookie",viewerCookie);
+      expect(me.body.user.permissions).toContain("files.write");
+      expect(me.body.user.permissions).toContain("console.command");
+      expect(me.body.user.servers).toEqual([config.server]);
+      expect(me.body.user.role).not.toBe("owner");
+      const signup = await http.post("/api/auth/signup").set("Origin",config.app)
+        .send({email:"shared-member@example.test", name:"Shared member", password, confirmPassword:password, role:"owner", permissions:["*"], servers:["other-server"]});
+      expect(signup.status).toBe(201);
+      expect(signup.body.user.role).toBe("operator");
+      expect(signup.body.user.permissions).toContain("files.write");
+      expect(signup.body.user.permissions).not.toContain("*");
+      expect(signup.body.user.servers).toEqual([config.server]);
+      expect((await http.get("/api/admin/users").set("Cookie",viewerCookie)).status).toBe(403);
+      expect((await http.put("/api/admin/integration").set("Cookie",viewerCookie).set("Origin",config.app).set("X-CSRF-Token",viewerCsrf).send({server:config.server})).status).toBe(403);
+      const summary = await http.get("/api/integration").set("Cookie",viewerCookie);
+      expect(summary.status).toBe(200);
+      expect(summary.body).not.toHaveProperty("key");
+      expect((await http.get("/api/servers")).status).toBe(401);
+      const {serverAccess} = await import("../server/auth");
+      expect(serverAccess({suspended:true,servers:[],permissions:[]})).toMatchObject({servers:[],permissions:[]});
+    } finally {config.sharedControl = false;}
+  });
+  it("routes plugin uploads to /plugins and creates only the missing plugins directory", async () => {
+    config.sharedControl=true;
+    try {
+      vi.mocked(panel).mockClear();
+      vi.mocked(panel).mockResolvedValueOnce({data:[]}).mockResolvedValueOnce({ok:true})
+        .mockResolvedValueOnce({data:[]}).mockResolvedValueOnce({attributes:{url:"https://paid-1.pulikesiyt.fun/upload"}});
+      const r = await http.post("/api/servers/9846e0b6/files/upload?plugin=true")
+        .set("Cookie",viewerCookie).set("Origin",config.app).set("X-CSRF-Token",viewerCsrf)
+        .set("Content-Type","application/octet-stream").set("X-File-Name","Example.jar")
+        .send(Buffer.from([0x50,0x4b,0x03,0x04,0,0,0,0]));
+      expect(r.status).toBe(200);
+      expect(r.body.message).toContain("Restart");
+      expect(panel).toHaveBeenCalledWith("/servers/9846e0b6/files/create-folder","POST",{root:"/",name:"plugins"});
+      expect(String(vi.mocked(externalFetch).mock.calls.at(-1)?.[0])).toContain("directory=%2Fplugins");
+    } finally {config.sharedControl=false;}
+  });
+  it("rejects invalid plugin archives before any hosting mutation", async () => {
+    config.sharedControl=true;
+    try {
+      vi.mocked(panel).mockClear();
+      const r = await http.post("/api/servers/9846e0b6/files/upload?plugin=true")
+        .set("Cookie",viewerCookie).set("Origin",config.app).set("X-CSRF-Token",viewerCsrf)
+        .set("Content-Type","application/octet-stream").set("X-File-Name","Fake.jar").send(Buffer.from("not a jar"));
+      expect(r.status).toBe(400);
+      expect(panel).not.toHaveBeenCalled();
+    } finally {config.sharedControl=false;}
+  });
+  it("refuses a duplicate plugin without overwriting the existing JAR", async () => {
+    config.sharedControl=true;
+    try {
+      vi.mocked(panel).mockClear();vi.mocked(externalFetch).mockClear();
+      vi.mocked(panel).mockResolvedValueOnce({data:[{attributes:{name:"plugins",is_file:false}}]})
+        .mockResolvedValueOnce({data:[{attributes:{name:"Existing.jar",is_file:true}}]});
+      const r = await http.post("/api/servers/9846e0b6/files/upload?plugin=true")
+        .set("Cookie",viewerCookie).set("Origin",config.app).set("X-CSRF-Token",viewerCsrf)
+        .set("Content-Type","application/octet-stream").set("X-File-Name","Existing.jar")
+        .send(Buffer.from([0x50,0x4b,0x03,0x04,0,0,0,0]));
+      expect(r.status).toBe(409);expect(externalFetch).not.toHaveBeenCalled();
+      expect(panel).not.toHaveBeenCalledWith(expect.stringContaining("create-folder"),expect.anything(),expect.anything());
+    } finally {config.sharedControl=false;}
+  });
+});
 describe("public account creation", () => {
   let signupCookie: string;
   it("creates a viewer awaiting approval and ignores injected privileges", async () => {

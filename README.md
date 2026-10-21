@@ -1,6 +1,6 @@
 # GOD SUBCONSOLE
 
-A runnable React/TypeScript Minecraft management dashboard with an Express backend, authenticated WebSocket relay, PostgreSQL-compatible storage, Drizzle schema, and electric-blue resource cards.
+A runnable React/TypeScript Minecraft dashboard with Midnight Bubble glass styling, click-pop effects, optional interface sound, an authenticated WebSocket relay and PostgreSQL-compatible storage. See [the current edition guide](docs/MIDNIGHT-BUBBLE.md) for shared access, plugins and integration settings.
 
 For a free online website, use the included [Render + Neon hosting guide](docs/FREE-HOSTING.md) and `render.yaml`. Hosting account access and private runtime configuration are required before it can be deployed. Free plans have usage limits and may sleep when idle.
 
@@ -14,7 +14,7 @@ notepad .env
 npm start
 ```
 
-Set `PTERODACTYL_CLIENT_API_KEY` in the local `.env` editor. The ZIP contains placeholders only. Do not put the key into the browser, a frontend variable, or a public repository. `setup.ps1` creates random session and encryption secrets and preserves an existing `.env`.
+Set `PTERODACTYL_CLIENT_API_KEY` in the local `.env` editor, or use the administrator's Settings → Hosting connection form after enabling two-factor authentication. The ZIP contains placeholders only. Never put the key in frontend code or a public repository. `setup.ps1` creates random session and encryption secrets and preserves an existing `.env`.
 
 Open [http://localhost:3100](http://localhost:3100). With the app running, open a second terminal in the project folder:
 
@@ -28,11 +28,11 @@ Manual alternative: copy `.env.example` to `.env`, replace both secret placehold
 
 ## Sign up and account approval
 
-The login page has Sign in, Sign up, and Create an account options. Public sign-up creates a viewer account with **no assigned servers**. Its owner approval screen is shown after registration. It cannot view resources, open a console, browse files, or perform server actions until the owner assigns access. Client-supplied roles and permissions are ignored during sign-up.
+The login page has Sign in and Sign up. As requested for this edition, **shared server control is enabled by default**: every signed-in, non-suspended member can manage the configured server. No owner promotion or approval is needed for server controls. Client-supplied roles are ignored. Site credentials and account administration remain restricted to the administrator.
 
-The owner uses User management → Manage access to assign server identifiers, a role, and explicit permissions. Setting a role does not silently grant extra permissions. Suspension revokes all sessions. Invitations can preassign access and expire after 24 hours. Set `ALLOW_SIGNUP=false` to allow invitation-only registration.
+Set `SHARED_SERVER_CONTROL=false` and restart to return to explicit server assignments and permissions. Suspension always blocks access. Invitations can preassign access and expire after 24 hours. Set `ALLOW_SIGNUP=false` for invitation-only registration.
 
-The owner is created only through the protected local bootstrap command. Regular sign-up never creates an owner, including for the first account.
+The site administrator is created through protected local bootstrap or the hosted setup token. Normal sign-up never creates that administrator.
 
 ## Join address
 
@@ -71,7 +71,7 @@ Server discovery/switching; resource summary/history; copyable custom join addre
 - The provider returned zero backup slots. Backup creation is disabled for that plan. No backup or restore was executed against the live server.
 - Email password recovery requires `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, and `SMTP_FROM`. Without configuration, the app explains the missing service instead of claiming to send mail.
 - Player roster, TPS/MSPT, and the running Java version have no verified integration. They remain unavailable. Docker-image metadata is shown only as metadata.
-- Archive/extract, general binary file downloads, plugin catalogs/installers, branding-logo uploads, and owner editing of integration credentials in the browser are not implemented. Manage those through the hosting panel/local configuration.
+- Archive/extract, general binary downloads, plugin catalog downloads and custom logo uploads are not implemented. Plugin JAR uploads and encrypted integration settings are available in this edition. Uploaded JARs need a restart; the dashboard does not claim runtime activation from a filename.
 - Resource history is bounded in memory, not durable monitoring storage. Application audit records currently have no automatic retention purge; use a database retention policy appropriate to your deployment.
 - The app is live-only. With no key configured, integration screens show unavailable; they never simulate successful hosting actions.
 - Embedded PostgreSQL (PGlite) is for single-process local use. Use an external PostgreSQL instance for production. Do not run a second process against the same embedded data directory. The bootstrap command communicates with the running app instead of opening its database.

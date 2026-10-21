@@ -18,6 +18,8 @@ import { json } from "@codemirror/lang-json";
 import { yaml } from "@codemirror/lang-yaml";
 import { request, allowed, setCsrf, csrfToken } from "./api";
 import { Empty, Modal } from "./components";
+import UploadPanel from "./UploadPanel";
+import IntegrationPanel from "./IntegrationPanel";
 import { bytes, permissionOptions, roleDefaults } from "../shared/resources";
 type Props = {
   page: string;
@@ -48,7 +50,7 @@ export default function Features({
     [filter, setFilter] = useState("");
   const base = `/servers/${server}`;
   useEffect(() => {
-    setDirectory("/");
+    setDirectory(page === "plugins" ? "/plugins" : "/");
     setSearch("");
     setEditor(null);
     setData(null);
@@ -63,11 +65,12 @@ export default function Features({
       ["backups", "schedules", "network", "startup", "subusers"].includes(page)
     )
       endpoint = base + "/features/" + page;
-    if (page === "files" || page === "plugins")
+    if (page === "files")
       endpoint =
         base +
         "/files?directory=" +
-        encodeURIComponent(page === "plugins" ? "/plugins" : directory);
+        encodeURIComponent(directory);
+    if (page === "plugins") endpoint = base + "/plugins";
     if (page === "users") endpoint = "/admin/users";
     if (page === "health") endpoint = "/admin/health";
     if (page === "activity")
@@ -388,56 +391,9 @@ export default function Features({
               <Plus size={14} />
               Folder
             </button>
-            <label className="upload-button">
-              Upload file
-              <input
-                type="file"
-                aria-label="Upload file"
-                disabled={!allowed(user, "files.write") || saving}
-                onChange={async (e) => {
-                  const file = e.target.files?.[0];
-                  e.target.value = "";
-                  if (!file) return;
-                  if (file.size > 10 * 1024 ** 2) {
-                    notify("Upload limit is 10 MiB");
-                    return;
-                  }
-                  if (
-                    !confirm(
-                      `Upload ${file.name} to ${directory}? Uploaded server code can execute with the server’s permissions. Existing files are not overwritten.`,
-                    )
-                  )
-                    return;
-                  setSaving(true);
-                  try {
-                    const response = await fetch(
-                      "/api" +
-                        base +
-                        "/files/upload?directory=" +
-                        encodeURIComponent(directory),
-                      {
-                        method: "POST",
-                        headers: {
-                          "Content-Type": "application/octet-stream",
-                          "X-CSRF-Token": csrfToken,
-                          "X-File-Name": encodeURIComponent(file.name),
-                        },
-                        body: file,
-                      },
-                    );
-                    const result = await response.json();
-                    if (!response.ok) throw Error(result.error);
-                    notify(result.message);
-                    refresh();
-                  } catch (e) {
-                    notify((e as Error).message);
-                  } finally {
-                    setSaving(false);
-                  }
-                }}
-              />
-            </label>
+<span className="tag">Drag & drop below</span>
           </div>
+          <UploadPanel server={server} directory={directory} disabled={!allowed(user, "files.write")} onDone={refresh} notify={notify}/>
           <div className="table-wrap">
             <table>
               <thead>
@@ -887,17 +843,19 @@ export default function Features({
       {!loading && page === "plugins" && (
         <section className="panel">
           <div className="panel-title">
-            <h2>Files in /plugins</h2>
-            <span className="tag">Observed files only</span>
+            <h2>Plugin library</h2>
+            <span className="tag">{list.filter((x:any)=>x.is_file && /\.jar$/i.test(x.name)).length} JAR files</span>
           </div>
           <div className="panel-note">
-            A JAR filename does not verify that a plugin is loaded, compatible,
-            or trustworthy. Nothing is installed automatically.
+            Upload a plugin JAR to place it in /plugins automatically. Restart to load it.
+            Data folders are created by the plugin when it starts. Loaded status must be checked in the console.
           </div>
+          <UploadPanel server={server} plugins disabled={!allowed(user,"files.write")} onDone={refresh} notify={notify}/>
+          <div className="plugin-grid">
           {list
-            .filter((x: any) => x.is_file && x.name.endsWith(".jar"))
+            .filter((x: any) => x.is_file && /\.jar$/i.test(x.name))
             .map((x: any) => (
-              <div className="list-row" key={x.name}>
+              <div className="plugin-tile" key={x.name}>
                 <FileText size={20} />
                 <div>
                   <h3>{x.name}</h3>
@@ -905,10 +863,13 @@ export default function Features({
                     {bytes(x.size)} · {new Date(x.modified_at).toLocaleString()}
                   </p>
                 </div>
-                <span className="tag">Runtime status unavailable</span>
+                <span className="tag">On disk · load status unknown</span>
               </div>
             ))}
-          {!list.length && !error && <Empty title="No plugin files found" />}
+          </div>
+          {!list.some((x:any)=>x.is_file && /\.jar$/i.test(x.name)) && !error && <Empty title="Your plugin library is empty">Drop a compatible plugin JAR above to get started.</Empty>}
+          <div className="plugin-folders"><h3>Plugin data folders</h3><p>{list.filter((x:any)=>!x.is_file).map((x:any)=>x.name).join(" · ") || "No data folders yet. Plugins create these after loading."}</p></div>
+          <div className="panel-note">Create folders and edit plugin configuration in File manager → plugins. Use compatible plugins from trusted sources.</div>
         </section>
       )}
       {!loading && page === "subusers" && (
@@ -1185,6 +1146,7 @@ export default function Features({
       )}
       {!loading && page === "settings" && (
         <div className="settings-grid">
+          <IntegrationPanel user={user} notify={notify}/>
           <section className="panel padded">
             <h2>Game join address</h2>
             <p>

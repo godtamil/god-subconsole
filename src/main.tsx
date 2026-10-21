@@ -3,7 +3,7 @@ import { createRoot } from "react-dom/client";
 import App from "./App";
 import Experience from "./Experience";
 import "./style.css";
-import "./electric.css";
+import "./bubble.css";
 createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <Experience />

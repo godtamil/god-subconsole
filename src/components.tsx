@@ -13,15 +13,18 @@ import { allocation, bytes } from "../shared/resources";
 export function Logo() {
   return (
     <div className="logo-mark" aria-hidden="true">
-      <svg viewBox="0 0 36 40">
+      <svg viewBox="0 0 40 40">
+        <circle cx="20" cy="20" r="18" fill="currentColor" opacity=".10"/>
+        <circle cx="20" cy="20" r="17" fill="none" stroke="currentColor" strokeWidth="1" opacity=".55"/>
+        <path d="m12 11 1-5 5 3 3-5 3 5 5-3-1 5Z" fill="currentColor"/>
         <path
-          d="M18 2 33 10v18l-15 10L3 28V10Z"
+          d="M20 13 31 19v11l-11 7-11-7V19Z"
           fill="none"
           stroke="currentColor"
           strokeWidth="2"
         />
         <path
-          d="m25 14-7-4-8 5v10l8 5 8-5v-7h-9v5h4l-3 2-3-2v-6l3-2 4 2Z"
+          d="m26 21-6-3-6 4v7l6 4 6-4v-5h-7v3h3l-2 2-3-2v-4l3-2 3 2Z"
           fill="currentColor"
         />
       </svg>

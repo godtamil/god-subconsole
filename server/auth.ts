@@ -13,6 +13,7 @@ import nodemailer from "nodemailer";
 import { db } from "./db";
 import { users, sessions, invitations, audit } from "./schema";
 import { config } from "./config";
+import { permissionOptions } from "../shared/resources";
 import {
   AppError,
   token,
@@ -38,6 +39,14 @@ export async function auditEvent(
 ) {
   await db.insert(audit).values({ id: token(), actor, action, server, result });
 }
+export function serverAccess(user: any) {
+  if (!config.sharedControl || user.suspended) return user;
+  return { ...user,
+    role: user.role === "owner" ? "owner" : "operator",
+    permissions: user.role === "owner" ? ["*"] : permissionOptions.filter(p => p !== "audit.read"),
+    servers: [config.server], sharedControl: true,
+  };
+}
 export async function lookupSession(value: string | undefined) {
   if (!value) return null;
   const rows = await db
@@ -48,7 +57,7 @@ export async function lookupSession(value: string | undefined) {
       and(eq(sessions.id, digest(value)), gt(sessions.expires, new Date())),
     )
     .limit(1);
-  return rows[0] && !rows[0].u.suspended ? rows[0] : null;
+  return rows[0] && !rows[0].u.suspended ? { ...rows[0], u: serverAccess(rows[0].u) } : null;
 }
 export async function auth(req: Request, res: Response, next: NextFunction) {
   try {
@@ -156,7 +165,7 @@ async function createSession(res: Response, u: any) {
     maxAge: 12 * 3600000,
     path: "/",
   });
-  return { user: publicUser(u), csrf };
+  return { user: publicUser(serverAccess(u)), csrf };
 }
 async function checkCode(u: any, code: string, database = db) {
   const totp = new OTPAuth.TOTP({
@@ -187,6 +196,7 @@ authRouter.get("/status", async (_req, res) => {
     ).length,
     emailConfigured: !!process.env.SMTP_HOST,
     signupEnabled: config.signup,
+    sharedControl: config.sharedControl,
   });
 });
 authRouter.post("/signup", limiter, csrf, async (req, res) => {
@@ -241,11 +251,12 @@ authRouter.post("/signup", limiter, csrf, async (req, res) => {
       throw new AppError(409, "An account with this email already exists.");
     throw e;
   }
-  await auditEvent(u.id, "auth.signup.pending-approval", null);
+  await auditEvent(u.id, config.sharedControl ? "auth.signup.shared-control" : "auth.signup.pending-approval", null);
   res.status(201).json({
     ...(await createSession(res, u)),
-    message:
-      "Account created. The owner must assign a server before you can access it.",
+    message: config.sharedControl
+      ? "Account created. Your shared server workspace is ready."
+      : "Account created. The owner must assign a server before you can access it.",
   });
 });
 authRouter.post("/login", limiter, csrf, async (req, res) => {

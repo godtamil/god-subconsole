@@ -24,6 +24,7 @@ import {
 import { db } from "./db";
 import { users, sessions, invitations, audit, settings } from "./schema";
 import { permissionOptions, roleDefaults } from "../shared/resources";
+import { integrationSummary, saveIntegration } from "./integration";
 export const api = Router();
 api.use(
   auth,
@@ -256,13 +257,22 @@ api.post(
   express.raw({ type: "application/octet-stream", limit: "10mb" }),
   async (req, res) => {
     const p = await gate(req, "files.write", "file.create");
-    const directory = filePath(req.query.directory || "/");
+    const pluginUpload = req.query.plugin === "true";
+    const directory = pluginUpload ? "/plugins" : filePath(req.query.directory || "/");
     const name = decodeURIComponent(req.get("X-File-Name") || "");
     if (!name || name.includes("/") || name.includes("\\"))
       throw new AppError(400, "Invalid upload name");
     filePath(directory + "/" + name);
     if (!Buffer.isBuffer(req.body))
       throw new AppError(400, "Upload binary file contents");
+    if (pluginUpload) {
+      if (!/\.jar$/i.test(name) || req.body.length < 4 || req.body.readUInt32LE(0) !== 0x04034b50)
+        throw new AppError(400, "Choose a plugin .jar archive");
+      const root = await panel(p + "/files/list?directory=%2F");
+      const plugins = root.data.find((x: any) => x.attributes.name === "plugins");
+      if (plugins?.attributes.is_file) throw new AppError(409, "A file named plugins blocks the plugin directory");
+      if (!plugins) await panel(p + "/files/create-folder", "POST", { root: "/", name: "plugins" });
+    }
     const existing = await panel(
       p + "/files/list?directory=" + encodeURIComponent(directory),
     );
@@ -271,7 +281,7 @@ api.post(
         409,
         "File already exists. Rename it before uploading a replacement.",
       );
-    if (sensitive(req.body.toString("utf8")))
+    if (!pluginUpload && sensitive(req.body.toString("utf8")))
       throw new AppError(403, "Secret-bearing content is protected");
     const link = await panel(p + "/files/upload");
     const url = new URL(link.attributes.url);
@@ -291,10 +301,20 @@ api.post(
       );
     await auditEvent(req.user.id, "file.upload", String(req.params.id));
     res.json({
-      message: "File uploaded. Server code changes may require a restart.",
+      message: pluginUpload
+        ? "Plugin JAR uploaded to /plugins. Restart the server to load it; the plugin creates its data folder when it starts."
+        : "File uploaded. Server code changes may require a restart.",
     });
   },
 );
+api.get("/servers/:id/plugins", async (req, res) => {
+  const p = await gate(req, "files.read", "file.read");
+  const root = await panel(p + "/files/list?directory=%2F");
+  const folder = root.data.find((x: any) => x.attributes.name === "plugins");
+  if (!folder || folder.attributes.is_file) return res.json({ data: [], directoryExists: false });
+  const files = await panel(p + "/files/list?directory=%2Fplugins");
+  res.json({ ...files, directoryExists: true });
+});
 api.get("/servers/:id/backups/:backup/download", async (req, res) => {
   const p = await gate(req, "backups.download", "backup.download");
   const uuid = z.uuid().parse(req.params.backup);
@@ -707,6 +727,16 @@ api.get("/branding", async (_req, res) => {
     .from(settings)
     .where(eq(settings.id, "branding"));
   res.json(row?.value || { name: "GOD SUBCONSOLE", accent: "#3985ff" });
+});
+api.get("/integration", async (req, res) => {
+  res.json(integrationSummary());
+});
+api.put("/admin/integration", requireOwner, requireMfa, async (req, res) => {
+  const b = z.object({ server: idSchema, key: z.string().regex(/^ptlc_[a-zA-Z0-9]+$/).max(256).optional() }).parse(req.body);
+  const result = await saveIntegration(b.server, b.key);
+  await db.update(users).set({ servers: [...new Set([...req.user.servers, result.server])] }).where(eq(users.id, req.user.id));
+  await auditEvent(req.user.id, "integration.update", b.server);
+  res.json({ ...result, message: "Connection verified and saved. Refreshing your server…" });
 });
 api.get("/audit", async (req, res) => {
   check(req, "audit.read");

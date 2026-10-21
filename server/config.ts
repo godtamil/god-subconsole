@@ -34,6 +34,7 @@ export const config = {
     .map((x) => x.trim()),
   production: process.env.NODE_ENV === "production",
   signup: process.env.ALLOW_SIGNUP !== "false",
+  sharedControl: process.env.SHARED_SERVER_CONTROL !== "false" && process.env.NODE_ENV !== "test",
   joinAddress:
     process.env.GAME_JOIN_ADDRESS || "godtamilsmp.chickenkiller.com:25568",
 };

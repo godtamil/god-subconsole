@@ -67,6 +67,7 @@ export function permitted(user: any, permission: string, server?: string) {
 }
 export function publicUser(u: any) {
   return {
+    sharedControl: !!u.sharedControl,
     id: u.id,
     email: u.email,
     name: u.name,

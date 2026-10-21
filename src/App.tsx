@@ -218,6 +218,10 @@ export default function App() {
       .catch((e) => {
         if (active) {
           setError(e.message);
+          if (user.servers.length) {
+            setServer(user.servers[0]);
+            setServers(user.servers.map((identifier:string) => ({identifier,name:"Configured server · " + identifier})));
+          }
           setLoading(false);
         }
       });
@@ -430,7 +434,7 @@ export default function App() {
           <div className="secure-badge">
             <ShieldCheck size={16} />
             <span>
-              Private by design<small>Credentials stay on the backend</small>
+              {user.sharedControl ? "Shared server control" : "Private by design"}<small>Credentials stay on the backend</small>
             </span>
           </div>
           <button className="profile" onClick={() => navigate("account")}>
@@ -439,7 +443,7 @@ export default function App() {
             </span>
             <span>
               {user.name}
-              <small>{user.role}</small>
+              <small>{user.sharedControl ? "Shared workspace" : user.role}</small>
             </span>
             <Settings size={16} />
           </button>
