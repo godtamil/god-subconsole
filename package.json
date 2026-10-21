@@ -29,7 +29,6 @@
     "lucide-react": "^0.468.0",
     "motion": "^12.23.24",
     "nodemailer": "^7.0.6",
-    "otpauth": "^9.4.1",
     "pg": "^8.16.3",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",

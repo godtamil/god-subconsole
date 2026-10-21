@@ -71,10 +71,10 @@ export function publicUser(u: any) {
     id: u.id,
     email: u.email,
     name: u.name,
+    avatarAt: u.avatarAt || null,
     role: u.role,
     permissions: u.permissions,
     servers: u.servers,
-    totpEnabled: !!u.totp,
     suspended: u.suspended,
   };
 }

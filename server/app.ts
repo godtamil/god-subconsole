@@ -33,7 +33,7 @@ export function createApp() {
     next();
   });
   app.get("/api/health", (_req, res) =>
-    res.json({ ok: true, name: "GOD SUBCONSOLE" }),
+    res.json({ ok: true, name: "GOD Subconsole" }),
   );
   app.use(
     "/api",
@@ -57,7 +57,14 @@ export function createApp() {
       res: express.Response,
       _next: express.NextFunction,
     ) => {
-      if(_req.user&&!['GET','HEAD','OPTIONS'].includes(_req.method))void auditEvent(_req.user.id,'denied:'+_req.method+':'+String(_req.route?.path||'api'),null,'failed').catch(()=>{});
+      if (_req.user && !["GET", "HEAD", "OPTIONS"].includes(_req.method)) {
+        const route = String(_req.route?.path || "api");
+        const action = route.endsWith("/power") ? "power.request.failed"
+          : route.endsWith("/command") ? "console.command.failed"
+          : "request.failed:" + _req.method + ":" + route;
+        const serverId = typeof _req.params?.id === "string" ? _req.params.id : null;
+        void auditEvent(_req.user.id, action, serverId, "failed").catch(() => {});
+      }
       if(res.headersSent){res.destroy();return;}
       res
         .status(

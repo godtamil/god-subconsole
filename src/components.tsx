@@ -151,8 +151,10 @@ export function ResourceCards({
                 <>
                   <div className="resource-value">{format(a.actual)}</div>
                   <div className="resource-limit">
-                    of <strong>{a.label || format(a.limit)}</strong> allocated
+                    {type === "cpu" ? "CPU used / " : "of "}<strong>{a.label || format(a.limit)}</strong> allocated
                   </div>
+                  {(type === "memory" || type === "disk") && a.actual !== null && a.limit !== null && a.limit > 0 &&
+                    <div className="resource-available">{bytes(Math.max(0,a.limit-a.actual))} available</div>}
                 </>
               )}
               <div

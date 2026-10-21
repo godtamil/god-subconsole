@@ -92,8 +92,8 @@ export default function IntegrationPanel({
                 />
               </label>
               <p className="panel-note">
-                Connection is checked before saving. Two-factor authentication
-                is required for this change.
+                Connection is checked before saving. Only the site owner can
+                change hosting credentials.
               </p>
               <button className="primary" disabled={busy}>
                 {busy

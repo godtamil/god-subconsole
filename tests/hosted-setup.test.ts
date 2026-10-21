@@ -4,7 +4,7 @@ process.env.DATA_DIR = "memory://";
 const { db, migrate, closeDb } = await import("../server/db");
 const { users } = await import("../server/schema");
 const { config } = await import("../server/config");
-const { token, encrypt, digest } = await import("../server/security");
+const { token } = await import("../server/security");
 const { createApp } = await import("../server/app");
 const { eq } = await import("drizzle-orm");
 const http = supertest(createApp());
@@ -35,6 +35,13 @@ describe("protected hosted owner setup", () => {
     expect(r.body.user.role).toBe("viewer");
     expect((await http.get("/api/auth/status")).body.setupRequired).toBe(true);
   });
+  it("lets a newly registered account sign in again with its password", async () => {
+    const login = await http.post("/api/auth/login").set("Origin", config.app)
+      .send({ email: "waiting@example.test", password });
+    expect(login.status).toBe(200);
+    expect(login.body.user.email).toBe("waiting@example.test");
+    expect(login.body.user).not.toHaveProperty("totpEnabled");
+  });
   it("rejects an incorrect setup credential", async () => {
     const r = await http
       .post("/api/auth/register")
@@ -59,12 +66,6 @@ describe("protected hosted owner setup", () => {
     expect(existing.role).toBe("viewer");
   });
   it("permits exactly one owner when setup submissions race", async () => {
-    const recovery = "owner-setup-recovery-code";
-    await db.update(users).set({totp: encrypt("JBSWY3DPEHPK3PXP"), recovery: [digest(recovery)]})
-      .where(eq(users.email, "waiting@example.test"));
-    const noMfa = await http.post("/api/auth/register").set("Origin", config.app)
-      .send({ email: "waiting@example.test", name: "Waiting member", password, token: setupToken });
-    expect(noMfa.status).toBe(401);
     const requests = ["first", "second"].map((name) =>
       http
         .post("/api/auth/register")
@@ -74,7 +75,6 @@ describe("protected hosted owner setup", () => {
           name,
           password,
           token: setupToken,
-          code: recovery,
         }),
     );
     const results = await Promise.all(requests);
@@ -83,7 +83,6 @@ describe("protected hosted owner setup", () => {
     expect(created.body.user.role).toBe("owner");
     expect(created.body.user.servers).toEqual([config.server]);
     expect((await db.select().from(users).where(eq(users.email, "waiting@example.test")))[0].role).toBe("owner");
-    expect((await db.select().from(users).where(eq(users.email, "waiting@example.test")))[0].recovery).toEqual([]);
     expect(
       (await db.select().from(users).where(eq(users.role, "owner"))).length,
     ).toBe(1);

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { Volume2, VolumeX } from "lucide-react";
+import { Logo } from "./components";
 type Burst = { id: number; x: number; y: number };
 export default function Experience() {
   const [sound, setSound] = useState(() => {
@@ -33,7 +34,7 @@ export default function Experience() {
             );
             gain.gain.setValueAtTime(0.0001, start);
             gain.gain.exponentialRampToValueAtTime(
-              entrance ? 0.035 : 0.025,
+              entrance ? 0.07 : 0.045,
               start + 0.008,
             );
             gain.gain.exponentialRampToValueAtTime(
@@ -93,7 +94,7 @@ export default function Experience() {
       if (reduced()) return;
       setEntry(true);
       clearTimeout(entryTimer);
-      entryTimer = setTimeout(() => setEntry(false), 850);
+      entryTimer = setTimeout(() => setEntry(false), 650);
     }
     document.addEventListener("click", clicked);
     window.addEventListener("god:entry", entered);
@@ -118,6 +119,10 @@ export default function Experience() {
           <span key={i} className={`floating-bubble bubble-${i}`} />
         ))}
         <div className="ambient-halo" />
+        <div className="ambient-current ambient-current-one" />
+        <div className="ambient-current ambient-current-two" />
+        <div className="ambient-stars" />
+        <div className="ambient-lines" />
       </div>
       <div className="bubble-fx" aria-hidden="true">
         {bursts.map((b) => (
@@ -151,8 +156,8 @@ export default function Experience() {
           <span />
           <span />
           <div>
-            <img src="/god-smp.png" alt="" />
-            <strong>WELCOME TO YOUR CONSOLE</strong>
+            <Logo />
+            <strong>GOD Subconsole</strong>
           </div>
         </div>
       )}

@@ -38,6 +38,10 @@ import Console, { useConsole } from "./Console";
 import Features from "./Features";
 import { request, allowed, setCsrf } from "./api";
 import { Logo, ResourceCards, HistoryChart, Modal } from "./components";
+import { profileImage } from "./avatar";
+import { auditLabel } from "./audit";
+import ServerSelection from "./ServerSelection";
+import { parseServerRoute, serverUrl } from "./serverRoute";
 import { bytes, uptime } from "../shared/resources";
 const nav = [
   ["overview", "Overview", LayoutDashboard],
@@ -49,6 +53,7 @@ const nav = [
   ["network", "Network", Network],
   ["startup", "Startup", SlidersHorizontal],
   ["plugins", "Plugins & mods", Puzzle],
+  ["mods", "Mod installer", Puzzle],
   ["settings", "Settings", Settings],
 ] as const;
 function Landscape() {
@@ -139,6 +144,9 @@ export default function App() {
     [page, setPage] = useState("overview"),
     [server, setServer] = useState(""),
     [servers, setServers] = useState<any[]>([]),
+    [serversLoading, setServersLoading] = useState(true),
+    [serversError, setServersError] = useState(""),
+    [serverRefresh, setServerRefresh] = useState(0),
     [overview, setOverview] = useState<any>(null),
     [loading, setLoading] = useState(true),
     [error, setError] = useState(""),
@@ -148,7 +156,8 @@ export default function App() {
     [notification, setNotification] = useState(false),
     [power, setPower] = useState<string | null>(null),
     [busy, setBusy] = useState(false),
-    [brand, setBrand] = useState({ name: "GOD SUBCONSOLE", accent: "#3985ff" }),
+    [pendingPower,setPendingPower] = useState<{signal:string;at:number;seenTransition?:boolean}|null>(null),
+    [brand, setBrand] = useState({ name: "GOD Subconsole", accent: "#3985ff" }),
     [activity, setActivity] = useState<any[]>([]);
   const stream = useConsole(user, server);
   useEffect(() => {
@@ -200,29 +209,21 @@ export default function App() {
   useEffect(() => {
     if (!user) return;
     let active = true;
+    setServersLoading(true);
+    setServersError("");
     request("/servers")
       .then((r) => {
         if (active) {
           setServers(r.data);
-          setServer((prev) =>
-            r.data.some((s: any) => s.identifier === prev)
-              ? prev
-              : r.data[0]?.identifier || "",
-          );
-          if (!r.data.length) {
-            setError("No accessible servers are assigned to this account.");
-            setLoading(false);
-          }
+          setServersLoading(false);
         }
       })
       .catch((e) => {
         if (active) {
-          setError(e.message);
-          if (user.servers.length) {
-            setServer(user.servers[0]);
-            setServers(user.servers.map((identifier:string) => ({identifier,name:"Configured server · " + identifier})));
-          }
-          setLoading(false);
+          setServers([]);
+          setServer("");
+          setServersError(e.message);
+          setServersLoading(false);
         }
       });
     request("/branding")
@@ -233,7 +234,25 @@ export default function App() {
     return () => {
       active = false;
     };
-  }, [user?.id]);
+  }, [user?.id, serverRefresh]);
+  useEffect(() => {
+    if (!user || serversLoading || serversError) return;
+    const syncRoute = () => {
+      const route = parseServerRoute(location.pathname);
+      if (route && servers.some((item) => item.identifier === route.identifier)) {
+        setOverview(null);
+        setServer(route.identifier);
+        setPage(route.page);
+      } else {
+        setServer("");
+        setPage("overview");
+        if (route) history.replaceState(null, "", "/");
+      }
+    };
+    syncRoute();
+    addEventListener("popstate", syncRoute);
+    return () => removeEventListener("popstate", syncRoute);
+  }, [user?.id, servers, serversLoading, serversError]);
   useEffect(() => {
     if (!user || !server) return;
     let active = true,
@@ -251,7 +270,14 @@ export default function App() {
         }));
         setError(d.error || "");
       } catch (e) {
-        if (active) setError((e as Error).message);
+        if (active) {
+          if ((e as any).status === 403 || (e as any).status === 404) {
+            setServer("");
+            setServers([]);
+            setServerRefresh((value) => value + 1);
+            history.replaceState(null, "", "/");
+          } else setError((e as Error).message);
+        }
       } finally {
         if (active) {
           setLoading(false);
@@ -270,6 +296,19 @@ export default function App() {
     return () => clearInterval(timer);
   }, []);
   useEffect(() => {
+    if (!pendingPower) return;
+    const actual = overview?.resources?.current_state;
+    if (pendingPower.signal === "restart" && ["offline", "starting", "stopping"].includes(actual)) {
+      if (!pendingPower.seenTransition) setPendingPower({ ...pendingPower, seenTransition: true });
+      return;
+    }
+    const settled = (pendingPower.signal === "start" && actual === "running") ||
+      (pendingPower.signal === "stop" && actual === "offline") ||
+      (pendingPower.signal === "restart" && pendingPower.seenTransition && actual === "running");
+    if (settled) { setPendingPower(null); notify("Server status confirmed by the hosting API."); }
+    else if (now - pendingPower.at > 60000) { setPendingPower(null); notify("Hosting accepted the action, but the final server status was not confirmed. Check the console before retrying."); }
+  }, [overview?.resources?.current_state,now,pendingPower]);
+  useEffect(() => {
     if (!user || !allowed(user, "audit.read")) return;
     let active = true;
     const load = () =>
@@ -286,6 +325,8 @@ export default function App() {
     };
   }, [user?.id]);
   const navigate = (p: string) => {
+    if (!server) return;
+    history.pushState(null, "", serverUrl(server, p));
     setPage(p);
     setSidebar(false);
     window.scrollTo({ top: 0 });
@@ -295,6 +336,19 @@ export default function App() {
       .writeText(value)
       .then(() => notify("Copied to clipboard"))
       .catch(() => notify("Clipboard access is unavailable in this browser"));
+  async function sendPower(signal: "start" | "restart" | "stop") {
+    if (!server || busy || pendingPower) return;
+    setBusy(true);
+    try {
+      const result = await request(`/servers/${server}/power`, "POST", { signal });
+      setPendingPower({signal,at:Date.now()});
+      notify(result.message);
+    } catch (reason) {
+      notify((reason as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
   if (user === undefined)
     return (
       <div className="boot">
@@ -304,7 +358,29 @@ export default function App() {
     );
   if (!user || new URLSearchParams(location.hash.slice(1)).has("setup"))
     return <Auth onLogin={setUser} />;
+  const signOut = () => request("/auth/logout", "POST")
+    .then(() => {
+      setCsrf(""); setUser(null); setServer(""); setServers([]);
+      setOverview(null); history.replaceState(null, "", "/");
+    })
+    .catch((reason) => notify(reason.message));
+  const manageServer = (identifier: string) => {
+    if (!servers.some((item) => item.identifier === identifier)) return;
+    history.pushState(null, "", serverUrl(identifier));
+    setOverview(null); setServer(identifier); setPage("overview");
+    window.scrollTo({ top: 0 });
+  };
+  if (!server || serversLoading || serversError) return <ServerSelection
+    user={user} servers={servers} loading={serversLoading} error={serversError}
+    onRetry={() => setServerRefresh((value) => value + 1)}
+    onManage={manageServer} onSignOut={signOut}
+  />;
   const status = overview?.resources?.current_state || "unavailable";
+  const canPower = (signal: "start" | "stop" | "restart" | "kill") => {
+    const upstream = overview?.server?.permissions || [];
+    return !!overview?.server && allowed(user, `power.${signal}`) &&
+      (overview.server.isOwner || upstream.includes("*") || upstream.includes(`control.${signal === "kill" ? "stop" : signal}`));
+  };
   const stale =
     !!overview?.updatedAt &&
     (!!error || now - new Date(overview.updatedAt).getTime() > 15000);
@@ -335,12 +411,12 @@ export default function App() {
         id="workspace-navigation"
         className={"sidebar " + (sidebar ? "open" : "")}
       >
-        <button className="brand" onClick={() => navigate("overview")}>
+        <button className="brand" onClick={() => { history.pushState(null, "", "/"); setServer(""); }}>
           <Logo />
           <div>
-            {brand.name === "GOD SUBCONSOLE" ? (
+            {brand.name.toLowerCase() === "god subconsole" ? (
               <>
-                GOD <b>SUBCONSOLE</b>
+                GOD <b>Subconsole</b>
               </>
             ) : (
               brand.name
@@ -362,8 +438,7 @@ export default function App() {
             id="server-select"
             value={server}
             onChange={(e) => {
-              setServer(e.target.value);
-              navigate("overview");
+              manageServer(e.target.value);
             }}
           >
             {!servers.length && <option value="">No assigned servers</option>}
@@ -439,7 +514,7 @@ export default function App() {
           </div>
           <button className="profile" onClick={() => navigate("account")}>
             <span className="avatar">
-              {user.name.slice(0, 1).toUpperCase()}
+              {profileImage(user) ? <img src={profileImage(user)} alt="" /> : user.name.slice(0, 1).toUpperCase()}
             </span>
             <span>
               {user.name}
@@ -462,7 +537,7 @@ export default function App() {
             <Menu size={20} />
           </button>
           <div className="breadcrumbs">
-            Workspace <ChevronRight size={13} />
+            <button className="breadcrumb-back" onClick={() => { history.pushState(null, "", "/"); setServer(""); }}>GOD Servers</button> <ChevronRight size={13} />
             <span>{overview?.server?.name || "Server"}</span>
             <ChevronRight size={13} />
             <strong>
@@ -480,7 +555,7 @@ export default function App() {
               onClick={() => setNotification(!notification)}
             >
               <Bell size={18} />
-              {(error || !user.totpEnabled) && <i />}
+              {error && <i />}
             </button>
             <span className="divider" />
             <button
@@ -488,21 +563,13 @@ export default function App() {
               aria-label="Open account"
               onClick={() => navigate("account")}
             >
-              {user.name[0].toUpperCase()}
+              {profileImage(user) ? <img src={profileImage(user)} alt="" /> : user.name[0].toUpperCase()}
             </button>
             <button
               className="icon-button"
               aria-label="Sign out"
               title="Sign out"
-              onClick={() =>
-                request("/auth/logout", "POST")
-                  .then(() => {
-                    setCsrf("");
-                    setUser(null);
-                    setOverview(null);
-                  })
-                  .catch((e) => notify(e.message))
-              }
+              onClick={signOut}
             >
               <LogOut size={17} />
             </button>
@@ -512,13 +579,7 @@ export default function App() {
           <div className="notification-panel panel">
             <h3>Notifications</h3>
             {error && <p className="error-text">{error}</p>}
-            {!user.totpEnabled && (
-              <p>
-                Enable two-factor authentication in Account to unlock
-                owner/admin management changes.
-              </p>
-            )}
-            {!error && user.totpEnabled && <p>No action required.</p>}
+            {!error && <p>No action required.</p>}
             <button
               onClick={() => {
                 navigate("account");
@@ -578,7 +639,7 @@ export default function App() {
                   {stale ? " Displaying last known values." : ""}
                 </div>
               )}
-              <section className="server-hero">
+              <section className="server-hero" data-state={fresh ? status : "unavailable"}>
                 <div className="hero-content">
                   <div className="hero-kicker">
                     <span
@@ -601,6 +662,7 @@ export default function App() {
                     {overview?.server?.description ||
                       "Your world. Ready when you are."}
                   </p>
+                  {pendingPower && <div className="power-pending" role="status">{pendingPower.signal} request accepted · waiting for live server status</div>}
                   <button
                     className="join-address"
                     disabled={!address}
@@ -612,40 +674,41 @@ export default function App() {
                   </button>
                 </div>
                 <Landscape />
-                <div className="power-controls">
+                <div className="server-status-visual" aria-hidden="true"><i/><span>{fresh ? status : "NO SIGNAL"}</span></div>
+                <div className={"power-controls " + (busy || pendingPower ? "power-busy" : "")}>
                   <button
                     className="power-start"
                     disabled={
                       !server ||
-                      busy ||
-                      !allowed(user, "power.start") ||
+                      busy || !!pendingPower ||
+                      !canPower("start") || !fresh ||
                       status === "running"
                     }
-                    onClick={() => setPower("start")}
+                    onClick={() => sendPower("start")}
                   >
                     <Play size={15} fill="currentColor" />
                     Start
                   </button>
                   <button
                     disabled={
-                      !server || busy || !allowed(user, "power.restart")
+                      !server || busy || !!pendingPower || !canPower("restart") || !fresh || status !== "running"
                     }
-                    onClick={() => setPower("restart")}
+                    onClick={() => sendPower("restart")}
                   >
                     <RotateCw size={15} />
                     Restart
                   </button>
                   <button
                     className="power-stop"
-                    disabled={!server || busy || !allowed(user, "power.stop")}
-                    onClick={() => setPower("stop")}
+                    disabled={!server || busy || !!pendingPower || !canPower("stop") || !fresh || status === "offline"}
+                    onClick={() => sendPower("stop")}
                   >
                     <Square size={13} fill="currentColor" />
                     Stop
                   </button>
                   <button
                     className="force-stop"
-                    disabled={!server || !allowed(user, "power.kill")}
+                    disabled={!server || busy || !!pendingPower || !canPower("kill") || !fresh || status === "offline"}
                     onClick={() => setPower("kill")}
                   >
                     Force stop
@@ -659,6 +722,7 @@ export default function App() {
                   server={server}
                   stream={stream}
                   notify={notify}
+                  serverState={stream.serverState === "unavailable" ? status : stream.serverState}
                   large
                 />
               ) : (
@@ -669,6 +733,7 @@ export default function App() {
                       server={server}
                       stream={stream}
                       notify={notify}
+                      serverState={stream.serverState === "unavailable" ? status : stream.serverState}
                     />
                     <section className="panel server-details">
                       <div className="panel-title">
@@ -789,7 +854,7 @@ export default function App() {
                               <ShieldCheck size={14} />
                             </span>
                             <div>
-                              {a.action}
+                              {auditLabel(a.action)}
                               <small>
                                 {new Date(a.createdAt).toLocaleString()}
                               </small>
@@ -811,7 +876,7 @@ export default function App() {
               <footer className="dashboard-footer">
                 <span>
                   <Logo />
-                  GOD SUBCONSOLE{" "}
+                  GOD Subconsole{" "}
                   <span className="muted">/ Built for your world.</span>
                 </span>
                 <span>

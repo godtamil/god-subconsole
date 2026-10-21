@@ -8,18 +8,15 @@ import { rateLimit } from "express-rate-limit";
 import { hash, verify } from "@node-rs/argon2";
 import { and, eq, gt, lt, sql } from "drizzle-orm";
 import { z } from "zod";
-import * as OTPAuth from "otpauth";
 import nodemailer from "nodemailer";
 import { db } from "./db";
-import { users, sessions, invitations, audit } from "./schema";
+import { users, sessions, invitations, audit, profileImages } from "./schema";
 import { config } from "./config";
 import { permissionOptions } from "../shared/resources";
 import {
   AppError,
   token,
   digest,
-  encrypt,
-  decrypt,
   publicUser,
   permitted,
 } from "./security";
@@ -95,24 +92,10 @@ export function requireOwner(req: Request, _res: Response, next: NextFunction) {
     ? next()
     : next(new AppError(403, "Owner access required"));
 }
-export function requireMfa(req: Request, _res: Response, next: NextFunction) {
-  return ["owner", "admin"].includes(req.user.role) && !req.user.totp
-    ? next(
-        new AppError(
-          403,
-          "Enable two-factor authentication in Account before management changes",
-        ),
-      )
-    : next();
-}
 const password = z.string().min(12).max(128);
 const loginSchema = z.object({
-  email: z
-    .email()
-    .max(254)
-    .transform((x) => x.toLowerCase()),
+  email: z.string().trim().min(1).max(254),
   password: z.string().max(128),
-  code: z.string().max(64).optional(),
 });
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -166,24 +149,6 @@ async function createSession(res: Response, u: any) {
     path: "/",
   });
   return { user: publicUser(serverAccess(u)), csrf };
-}
-async function checkCode(u: any, code: string, database = db) {
-  const totp = new OTPAuth.TOTP({
-    secret: OTPAuth.Secret.fromBase32(decrypt(u.totp)),
-    algorithm: "SHA1",
-    digits: 6,
-    period: 30,
-  });
-  if (totp.validate({ token: code, window: 1 }) !== null) return true;
-  const candidate = digest(code);
-  if (!u.recovery.includes(candidate)) return false;
-  // Atomic consumption prevents the same recovery code from being used concurrently.
-  const updated = await database
-    .update(users)
-    .set({ recovery: u.recovery.filter((x: string) => x !== candidate) })
-    .where(and(eq(users.id, u.id), eq(users.recovery, u.recovery)))
-    .returning();
-  return updated.length === 1;
 }
 authRouter.get("/status", async (_req, res) => {
   res.json({
@@ -261,11 +226,12 @@ authRouter.post("/signup", limiter, csrf, async (req, res) => {
 });
 authRouter.post("/login", limiter, csrf, async (req, res) => {
   const b = loginSchema.parse(req.body);
-  const [u] = await db.select().from(users).where(eq(users.email, b.email));
+  const matches = b.email.includes("@")
+    ? await db.select().from(users).where(eq(users.email, b.email.toLowerCase())).limit(2)
+    : await db.select().from(users).where(sql`lower(${users.name}) = ${b.email.toLowerCase()}`).limit(2);
+  const u = matches.length === 1 ? matches[0] : null;
   if (!u || u.suspended || !(await verify(u.password, b.password)))
     throw new AppError(401, "Email or password is incorrect");
-  if (u.totp && (!b.code || !(await checkCode(u, b.code))))
-    throw new AppError(401, "A valid two-factor or recovery code is required");
   await auditEvent(u.id, "auth.login", null);
   res.json(await createSession(res, u));
 });
@@ -276,7 +242,6 @@ authRouter.post("/register", limiter, csrf, async (req, res) => {
       email: z.email().transform((x) => x.toLowerCase()),
       name: z.string().min(1).max(80),
       password,
-      code: z.string().max(128).optional(),
     })
     .parse(req.body);
   const u = await db.transaction(async (tx: any) => {
@@ -327,8 +292,6 @@ authRouter.post("/register", limiter, csrf, async (req, res) => {
     if (existing && invite.email === "bootstrap") {
       if (existing.suspended || !(await verify(existing.password, b.password)))
         throw new AppError(401, "Use this existing account's current password to finish owner setup.");
-      if (existing.totp && (!b.code || !(await checkCode(existing, b.code, tx))))
-        throw new AppError(401, "A valid two-factor or recovery code is required");
       const [claimed] = await tx.update(users).set({
         role: "owner",
         permissions: ["*"],
@@ -390,7 +353,7 @@ authRouter.post("/forgot", limiter, csrf, async (req, res) => {
     await transport.sendMail({
       from: process.env.SMTP_FROM,
       to: email,
-      subject: "Reset your GOD SUBCONSOLE password",
+      subject: "Reset your GOD Subconsole password",
       text: `Reset your password within 15 minutes: ${config.app}/#reset=${value}`,
     });
   }
@@ -422,8 +385,7 @@ authRouter.post("/reset", limiter, csrf, async (req, res) => {
     if (u) await tx.delete(sessions).where(eq(sessions.userId, u.id));
   });
   res.json({
-    message:
-      "Password updated. Sign in with your new password and two-factor code.",
+    message: "Password updated. Sign in with your new password.",
   });
 });
 authRouter.use(auth, csrf);
@@ -465,6 +427,40 @@ authRouter.patch("/profile", async (req, res) => {
   await db.update(users).set({ name }).where(eq(users.id, req.user.id));
   res.json({ ok: true });
 });
+authRouter.get("/avatar", async (req, res) => {
+  const [image] = await db.select().from(profileImages).where(eq(profileImages.userId, req.user.id)).limit(1);
+  if (!image) throw new AppError(404, "Profile photo unavailable");
+  res.type(image.mime).send(Buffer.from(image.body, "base64"));
+});
+authRouter.post("/avatar", async (req, res) => {
+  const { dataUrl } = z.object({dataUrl:z.string().max(350_000)}).parse(req.body);
+  const match = /^data:(image\/(?:png|jpeg|webp));base64,([A-Za-z0-9+/]+={0,2})$/.exec(dataUrl);
+  if (!match) throw new AppError(400, "Choose a PNG, JPEG, or WebP photo");
+  const mime = match[1], data = Buffer.from(match[2], "base64");
+  if (!data.length || data.length > 250_000) throw new AppError(413, "Profile photo must be under 250 KB");
+  const valid = mime === "image/png"
+    ? data.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10]))
+    : mime === "image/jpeg"
+      ? data[0] === 255 && data[1] === 216 && data.at(-2) === 255 && data.at(-1) === 217
+      : data.toString("ascii",0,4) === "RIFF" && data.toString("ascii",8,12) === "WEBP";
+  if (!valid) throw new AppError(400, "Photo content does not match its format");
+  const avatarAt = new Date();
+  await db.transaction(async (tx:any) => {
+    await tx.insert(profileImages).values({userId:req.user.id,mime,body:data.toString("base64")})
+      .onConflictDoUpdate({target:profileImages.userId,set:{mime,body:data.toString("base64")}});
+    await tx.update(users).set({avatarAt}).where(eq(users.id,req.user.id));
+  });
+  await auditEvent(req.user.id,"profile.avatar.update",null);
+  res.json({avatarAt:avatarAt.toISOString(),message:"Profile photo saved to your account."});
+});
+authRouter.delete("/avatar", async (req, res) => {
+  await db.transaction(async (tx:any) => {
+    await tx.delete(profileImages).where(eq(profileImages.userId,req.user.id));
+    await tx.update(users).set({avatarAt:null}).where(eq(users.id,req.user.id));
+  });
+  await auditEvent(req.user.id,"profile.avatar.remove",null);
+  res.json({avatarAt:null,message:"Profile photo removed."});
+});
 authRouter.post("/password", async (req, res) => {
   const b = z
     .object({ current: z.string().max(128), password })
@@ -480,49 +476,6 @@ authRouter.post("/password", async (req, res) => {
   });
   res.clearCookie("gs_session", { path: "/" }).json({
     message: "Password changed; all sessions revoked. Sign in again.",
-  });
-});
-authRouter.post("/2fa/setup", async (req, res) => {
-  if (req.user.totp)
-    throw new AppError(409, "Two-factor authentication is already enabled");
-  const b = z.object({ password: z.string().max(128) }).parse(req.body);
-  if (!(await verify(req.user.password, b.password)))
-    throw new AppError(403, "Password is incorrect");
-  const secret = new OTPAuth.Secret({ size: 20 });
-  await db
-    .update(users)
-    .set({ pendingTotp: encrypt(secret.base32) })
-    .where(eq(users.id, req.user.id));
-  const otp = new OTPAuth.TOTP({
-    issuer: "GOD SUBCONSOLE",
-    label: req.user.email,
-    secret,
-  });
-  res.json({ secret: secret.base32, uri: otp.toString() });
-});
-authRouter.post("/2fa/enable", async (req, res) => {
-  const { code } = z.object({ code: z.string().length(6) }).parse(req.body);
-  if (!req.user.pendingTotp)
-    throw new AppError(400, "Start two-factor setup first");
-  const totp = new OTPAuth.TOTP({
-    secret: OTPAuth.Secret.fromBase32(decrypt(req.user.pendingTotp)),
-  });
-  if (totp.validate({ token: code, window: 1 }) === null)
-    throw new AppError(400, "Invalid authenticator code");
-  const codes = Array.from({ length: 8 }, () => token().slice(0, 16));
-  await db
-    .update(users)
-    .set({
-      totp: req.user.pendingTotp,
-      pendingTotp: null,
-      recovery: codes.map(digest),
-    })
-    .where(eq(users.id, req.user.id));
-  await db.delete(sessions).where(eq(sessions.userId, req.user.id));
-  await auditEvent(req.user.id, "auth.2fa-enabled", null);
-  res.json({
-    ...(await createSession(res, { ...req.user, totp: req.user.pendingTotp })),
-    recovery: codes,
   });
 });
 export async function cleanupAuth() {

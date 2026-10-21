@@ -12,7 +12,7 @@ import {
   sanitizeDetails,
   externalFetch,
 } from "./panel";
-import { auth, csrf, requireOwner, requireMfa, auditEvent } from "./auth";
+import { auth, csrf, requireOwner, auditEvent } from "./auth";
 import {
   AppError,
   permitted,
@@ -25,6 +25,9 @@ import { db } from "./db";
 import { users, sessions, invitations, audit, settings } from "./schema";
 import { permissionOptions, roleDefaults } from "../shared/resources";
 import { integrationSummary, saveIntegration } from "./integration";
+import { searchProjects, compatibleVersions } from "./modrinth";
+import { detectServerSoftware } from "./software";
+import { installedAddons, startInstallJob, getInstallJob } from "./install";
 export const api = Router();
 api.use(
   auth,
@@ -46,6 +49,7 @@ api.use(
 const histories = new Map<string, any[]>();
 const pending = new Set<string>();
 const idSchema = z.string().regex(/^[a-zA-Z0-9_-]{1,80}$/);
+const addonKind = z.enum(["plugin", "mod"]);
 const sensitive = (content: string) =>
   /(?:password|passwd|secret|token|api[_-]?key)\s*[:=]\s*["']?[^\s"'#]+/i.test(
     content,
@@ -62,6 +66,54 @@ async function gate(req: any, local: string, upstream: string) {
   check(req, local, id);
   await upstreamPermission(id, upstream);
   return serverPath(id);
+}
+api.get("/servers/:id/addons/software", async (req, res) => {
+  await gate(req, "files.read", "file.read");
+  res.json(await detectServerSoftware(String(req.params.id)));
+});
+api.get("/servers/:id/addons/search", async (req, res) => {
+  await gate(req, "files.read", "file.read");
+  const kind = addonKind.parse(req.query.kind);
+  const query = z.string().trim().min(2).max(80).parse(req.query.q);
+  const offset = z.coerce.number().int().min(0).max(1000).default(0).parse(req.query.offset);
+  const software = await detectServerSoftware(String(req.params.id));
+  res.json(await searchProjects(query, offset, software, kind));
+});
+api.get("/servers/:id/addons/:kind/:project/versions", async (req, res) => {
+  await gate(req, "files.read", "file.read");
+  const kind = addonKind.parse(req.params.kind);
+  const project = z.string().regex(/^[A-Za-z0-9]{1,24}$/).parse(req.params.project);
+  const software = await detectServerSoftware(String(req.params.id));
+  res.json({ source: "Modrinth", data: await compatibleVersions(project, software, kind) });
+});
+api.get("/servers/:id/addons/:kind/installed", async (req, res) => {
+  await gate(req, "files.read", "file.read");
+  res.json(await installedAddons(String(req.params.id), addonKind.parse(req.params.kind)));
+});
+api.post("/servers/:id/addons/install", async (req, res) => {
+  await gate(req, "files.write", "file.create");
+  check(req, "files.read", String(req.params.id));
+  const input = z.object({ kind: addonKind, projectId: z.string().regex(/^[A-Za-z0-9]{1,24}$/), versionId: z.string().regex(/^[A-Za-z0-9]{1,24}$/) }).parse(req.body);
+  const job = startInstallJob(req.user.id, String(req.params.id), input.kind, input.projectId, input.versionId);
+  res.status(202).json({ jobId: job.id });
+});
+api.get("/servers/:id/addons/jobs/:job", async (req, res) => {
+  check(req, "view", String(req.params.id));
+  res.json(getInstallJob(String(req.params.job), req.user.id, String(req.params.id)));
+});
+async function checkedFilePath(server: string, input: unknown) {
+  const path = filePath(input);
+  const parts = path.split("/").filter(Boolean);
+  if (parts.length > 32) throw new AppError(400,"File path is too deep");
+  let directory = "/";
+  for (const part of parts) {
+    const listed = await panel(server + "/files/list?directory=" + encodeURIComponent(directory));
+    const item = listed.data?.find((entry:any) => entry.attributes.name === part)?.attributes;
+    if (item?.is_symlink || item?.is_link)
+      throw new AppError(403,"Symlink paths are not available in this file manager");
+    directory = directory.replace(/\/$/,"") + "/" + part;
+  }
+  return path;
 }
 api.get("/servers", async (req, res) => {
   if (!req.user.servers.length) {
@@ -128,7 +180,17 @@ api.get("/servers/:id/overview", async (req, res) => {
     },
   });
 });
-api.put("/servers/:id/display-address", requireMfa, async (req, res) => {
+api.get("/servers/:id/console-access", async (req, res) => {
+  const id = idSchema.parse(req.params.id);
+  check(req, "console.read", id);
+  const details = await upstreamPermission(id, "websocket.connect");
+  const upstream = details.meta?.user_permissions || [];
+  res.json({
+    canCommand: permitted(req.user, "console.command", id) &&
+      (!!details.meta?.is_server_owner || upstream.includes("*") || upstream.includes("control.console")),
+  });
+});
+api.put("/servers/:id/display-address",  async (req, res) => {
   const id = idSchema.parse(req.params.id);
   check(req, "settings.write", id);
   await upstreamPermission(id, "view");
@@ -155,7 +217,7 @@ api.put("/servers/:id/display-address", requireMfa, async (req, res) => {
       "Display join address saved. DNS and hosting allocations are managed separately.",
   });
 });
-api.post("/servers/:id/power", requireMfa, async (req, res) => {
+api.post("/servers/:id/power",  async (req, res) => {
   const b = z
     .object({
       signal: z.enum(["start", "stop", "restart", "kill"]),
@@ -184,7 +246,7 @@ api.post("/servers/:id/power", requireMfa, async (req, res) => {
     setTimeout(() => pending.delete(id), 10000).unref();
   }
 });
-api.post("/servers/:id/command", requireMfa, async (req, res) => {
+api.post("/servers/:id/command",  async (req, res) => {
   const b = z
     .object({
       command: z.string().min(1).max(1000).optional(),
@@ -253,7 +315,6 @@ api.get("/servers/:id/features/:feature", async (req, res) => {
 });
 api.post(
   "/servers/:id/files/upload",
-  requireMfa,
   express.raw({ type: "application/octet-stream", limit: "10mb" }),
   async (req, res) => {
     const p = await gate(req, "files.write", "file.create");
@@ -268,8 +329,12 @@ api.post(
     if (pluginUpload) {
       if (!/\.jar$/i.test(name) || req.body.length < 4 || req.body.readUInt32LE(0) !== 0x04034b50)
         throw new AppError(400, "Choose a plugin .jar archive");
+    }
+    await checkedFilePath(p,directory);
+    if (pluginUpload) {
       const root = await panel(p + "/files/list?directory=%2F");
       const plugins = root.data.find((x: any) => x.attributes.name === "plugins");
+      if (plugins?.attributes.is_symlink || plugins?.attributes.is_link) throw new AppError(403,"Plugin directory cannot be a symlink");
       if (plugins?.attributes.is_file) throw new AppError(409, "A file named plugins blocks the plugin directory");
       if (!plugins) await panel(p + "/files/create-folder", "POST", { root: "/", name: "plugins" });
     }
@@ -311,9 +376,33 @@ api.get("/servers/:id/plugins", async (req, res) => {
   const p = await gate(req, "files.read", "file.read");
   const root = await panel(p + "/files/list?directory=%2F");
   const folder = root.data.find((x: any) => x.attributes.name === "plugins");
+  if (folder?.attributes.is_symlink || folder?.attributes.is_link) throw new AppError(403,"Plugin directory cannot be a symlink");
   if (!folder || folder.attributes.is_file) return res.json({ data: [], directoryExists: false });
   const files = await panel(p + "/files/list?directory=%2Fplugins");
   res.json({ ...files, directoryExists: true });
+});
+api.post("/servers/:id/plugins/toggle",  async (req, res) => {
+  const { name, enabled } = z.object({
+    name: z.string().regex(/^[^/\\\x00-\x1f]+\.jar(?:\.disabled)?$/i).max(180),
+    enabled: z.boolean(),
+  }).parse(req.body);
+  const p = await gate(req, "files.write", "file.update");
+  await checkedFilePath(p,"/plugins/"+name);
+  const files = await panel(p + "/files/list?directory=%2Fplugins");
+  const entries = files.data.map((x: any) => x.attributes);
+  const source = entries.find((x: any) => x.name === name && x.is_file);
+  if (!source) throw new AppError(404, "Plugin file is no longer available");
+  if (enabled === /\.jar$/i.test(name))
+    throw new AppError(409, "Plugin is already in that state");
+  const next = enabled ? name.replace(/\.disabled$/i, "") : name + ".disabled";
+  if (entries.some((x: any) => x.name.toLowerCase() === next.toLowerCase()))
+    throw new AppError(409, "A plugin file with that name already exists");
+  await panel(p + "/files/rename", "PUT", {
+    root: "/plugins",
+    files: [{ from: name, to: next }],
+  });
+  await auditEvent(req.user.id, enabled ? "plugin.enable" : "plugin.disable", String(req.params.id));
+  res.json({ message: `Plugin ${enabled ? "enabled" : "disabled"} on disk. Restart the server to apply the change.` });
 });
 api.get("/servers/:id/backups/:backup/download", async (req, res) => {
   const p = await gate(req, "backups.download", "backup.download");
@@ -338,7 +427,7 @@ api.get("/servers/:id/backups/:backup/download", async (req, res) => {
     clearTimeout(timeout);
   }
 });
-api.post("/servers/:id/subusers", requireMfa, async (req, res) => {
+api.post("/servers/:id/subusers",  async (req, res) => {
   const p = await gate(req, "subusers.write", "user.create");
   const b = z
     .object({
@@ -367,7 +456,7 @@ api.post("/servers/:id/subusers", requireMfa, async (req, res) => {
   await auditEvent(req.user.id, "hosting-user.create", String(req.params.id));
   res.json(result);
 });
-api.put("/servers/:id/subusers/:uuid", requireMfa, async (req, res) => {
+api.put("/servers/:id/subusers/:uuid",  async (req, res) => {
   const p = await gate(req, "subusers.write", "user.update");
   const b = z
     .object({
@@ -395,7 +484,7 @@ api.put("/servers/:id/subusers/:uuid", requireMfa, async (req, res) => {
   );
   await auditEvent(req.user.id, "hosting-user.update", String(req.params.id));
 });
-api.delete("/servers/:id/subusers/:uuid", requireMfa, async (req, res) => {
+api.delete("/servers/:id/subusers/:uuid",  async (req, res) => {
   const p = await gate(req, "subusers.write", "user.delete");
   if (req.body.confirmation !== "REMOVE ACCESS")
     throw new AppError(400, "Type REMOVE ACCESS to confirm");
@@ -405,7 +494,7 @@ api.delete("/servers/:id/subusers/:uuid", requireMfa, async (req, res) => {
 });
 api.get("/servers/:id/files", async (req, res) => {
   const p = await gate(req, "files.read", "file.read");
-  const dir = filePath(req.query.directory || "/");
+  const dir = await checkedFilePath(p,req.query.directory || "/");
   const list = await panel(
     p + "/files/list?directory=" + encodeURIComponent(dir),
   );
@@ -414,6 +503,7 @@ api.get("/servers/:id/files", async (req, res) => {
     data: list.data.filter((x: any) => {
       try {
         filePath(dir + "/" + x.attributes.name);
+        if (x.attributes.is_symlink || x.attributes.is_link) return false;
         return true;
       } catch {
         return false;
@@ -423,7 +513,7 @@ api.get("/servers/:id/files", async (req, res) => {
 });
 api.get("/servers/:id/file", async (req, res) => {
   const p = await gate(req, "files.read", "file.read-content");
-  const path = filePath(req.query.path);
+  const path = await checkedFilePath(p,req.query.path);
   const content = await panel(
     p + "/files/contents?file=" + encodeURIComponent(path),
     "GET",
@@ -434,7 +524,24 @@ api.get("/servers/:id/file", async (req, res) => {
     throw new AppError(403, "File contains potential secrets and is protected");
   res.json({ content, revision: digest(content), path });
 });
-api.put("/servers/:id/file", requireMfa, async (req, res) => {
+api.get("/servers/:id/files/download", async (req, res) => {
+  const p = await gate(req, "files.read", "file.read");
+  const path = await checkedFilePath(p,req.query.path);
+  if (path === "/") throw new AppError(400, "Choose a file");
+  const link = await panel(p + "/files/download?file=" + encodeURIComponent(path));
+  const abort = new AbortController();
+  const timeout = setTimeout(() => abort.abort(), 10 * 60000);
+  res.on("close", () => abort.abort());
+  try {
+    const response = await externalFetch(new URL(link.attributes.url), { signal:abort.signal });
+    if (!response.ok || !response.body) throw new AppError(502,"File download is unavailable");
+    const filename = path.split("/").at(-1)!.replace(/[^a-zA-Z0-9._-]/g,"_").slice(0,180);
+    res.set({"Content-Type":"application/octet-stream","Content-Disposition":`attachment; filename="${filename}"`});
+    await pipeline(Readable.fromWeb(response.body as any),res);
+    await auditEvent(req.user.id,"file.download",String(req.params.id));
+  } finally { clearTimeout(timeout); }
+});
+api.put("/servers/:id/file",  async (req, res) => {
   const p = await gate(req, "files.write", "file.update");
   const b = z
     .object({
@@ -444,7 +551,7 @@ api.put("/servers/:id/file", requireMfa, async (req, res) => {
       create: z.boolean().optional(),
     })
     .parse(req.body);
-  const path = filePath(b.path);
+  const path = await checkedFilePath(p,b.path);
   if (sensitive(b.content))
     throw new AppError(
       403,
@@ -488,7 +595,7 @@ api.put("/servers/:id/file", requireMfa, async (req, res) => {
     message: "File saved. Configuration changes may require a restart.",
   });
 });
-api.post("/servers/:id/files/action", requireMfa, async (req, res) => {
+api.post("/servers/:id/files/action",  async (req, res) => {
   const b = z
     .object({
       action: z.enum(["folder", "rename", "copy", "delete"]),
@@ -508,7 +615,7 @@ api.post("/servers/:id/files/action", requireMfa, async (req, res) => {
           ? "file.create"
           : "file.update",
   );
-  const path = filePath(b.path);
+  const path = await checkedFilePath(p,b.path);
   if (path === "/") throw new AppError(400, "Choose a file or folder");
   if (b.action === "delete") {
     if (b.confirmation !== "DELETE")
@@ -527,7 +634,13 @@ api.post("/servers/:id/files/action", requireMfa, async (req, res) => {
       name,
     });
   } else {
-    const to = filePath(b.name);
+    const to = await checkedFilePath(p,b.name);
+    if (to === path) throw new AppError(409,"Source and destination are the same");
+    const destinationDirectory = to.slice(0,to.lastIndexOf("/")) || "/";
+    const destinationName = to.split("/").at(-1);
+    const destination = await panel(p + "/files/list?directory=" + encodeURIComponent(destinationDirectory));
+    if (destination.data.some((item:any) => item.attributes.name.toLowerCase() === destinationName?.toLowerCase()))
+      throw new AppError(409,"A file or folder already exists at the destination");
     await panel(p + "/files/rename", "PUT", {
       root: "/",
       files: [{ from: path.slice(1), to: to.slice(1) }],
@@ -536,7 +649,7 @@ api.post("/servers/:id/files/action", requireMfa, async (req, res) => {
   await auditEvent(req.user.id, "file." + b.action, String(req.params.id));
   res.json({ ok: true });
 });
-api.post("/servers/:id/backups", requireMfa, async (req, res) => {
+api.post("/servers/:id/backups",  async (req, res) => {
   const p = await gate(req, "backups.create", "backup.create");
   const b = z.object({ name: z.string().min(1).max(100) }).parse(req.body);
   const d = await upstreamPermission(String(req.params.id), "backup.create");
@@ -548,7 +661,6 @@ api.post("/servers/:id/backups", requireMfa, async (req, res) => {
 });
 api.post(
   "/servers/:id/backups/:backup/action",
-  requireMfa,
   async (req, res) => {
     const b = z
       .object({
@@ -579,7 +691,7 @@ const scheduleSchema = z.object({
   is_active: z.boolean(),
   only_when_online: z.boolean(),
 });
-api.post("/servers/:id/schedules", requireMfa, async (req, res) => {
+api.post("/servers/:id/schedules",  async (req, res) => {
   const p = await gate(req, "schedules.write", "schedule.create");
   const result = await panel(
     p + "/schedules",
@@ -589,7 +701,7 @@ api.post("/servers/:id/schedules", requireMfa, async (req, res) => {
   await auditEvent(req.user.id, "schedule.create", String(req.params.id));
   res.json(result);
 });
-api.put("/servers/:id/schedules/:schedule", requireMfa, async (req, res) => {
+api.put("/servers/:id/schedules/:schedule",  async (req, res) => {
   const p = await gate(req, "schedules.write", "schedule.update");
   res.json(
     await panel(
@@ -602,7 +714,7 @@ api.put("/servers/:id/schedules/:schedule", requireMfa, async (req, res) => {
   );
   await auditEvent(req.user.id, "schedule.update", String(req.params.id));
 });
-api.delete("/servers/:id/schedules/:schedule", requireMfa, async (req, res) => {
+api.delete("/servers/:id/schedules/:schedule",  async (req, res) => {
   if (req.body.confirmation !== "DELETE")
     throw new AppError(400, "Type DELETE to confirm");
   const p = await gate(req, "schedules.write", "schedule.delete");
@@ -615,9 +727,15 @@ api.delete("/servers/:id/schedules/:schedule", requireMfa, async (req, res) => {
   await auditEvent(req.user.id, "schedule.delete", String(req.params.id));
   res.json({ ok: true });
 });
+api.post("/servers/:id/schedules/:schedule/execute",  async (req,res) => {
+  const p = await gate(req,"schedules.write","schedule.update");
+  const schedule = z.coerce.number().int().positive().parse(req.params.schedule);
+  await panel(p + "/schedules/" + schedule + "/execute","POST");
+  await auditEvent(req.user.id,"schedule.execute",String(req.params.id));
+  res.status(202).json({message:"Schedule queued by hosting panel. Check its next run and server logs for outcome."});
+});
 api.post(
   "/servers/:id/schedules/:schedule/tasks{/:task}",
-  requireMfa,
   async (req, res) => {
     const b = z
       .object({
@@ -675,7 +793,6 @@ api.post(
 );
 api.delete(
   "/servers/:id/schedules/:schedule/tasks/:task",
-  requireMfa,
   async (req, res) => {
     if (req.body.confirmation !== "DELETE")
       throw new AppError(400, "Type DELETE to confirm");
@@ -696,7 +813,7 @@ api.delete(
     res.json({ ok: true });
   },
 );
-api.put("/servers/:id/startup", requireMfa, async (req, res) => {
+api.put("/servers/:id/startup",  async (req, res) => {
   const p = await gate(req, "startup.write", "startup.update");
   const b = z
     .object({
@@ -709,7 +826,7 @@ api.put("/servers/:id/startup", requireMfa, async (req, res) => {
   res.json(await panel(p + "/startup/variable", "PUT", b));
   await auditEvent(req.user.id, "startup.update", String(req.params.id));
 });
-api.post("/servers/:id/settings", requireMfa, async (req, res) => {
+api.post("/servers/:id/settings",  async (req, res) => {
   const p = await gate(req, "settings.write", "settings.rename");
   const b = z
     .object({
@@ -726,12 +843,12 @@ api.get("/branding", async (_req, res) => {
     .select()
     .from(settings)
     .where(eq(settings.id, "branding"));
-  res.json(row?.value || { name: "GOD SUBCONSOLE", accent: "#3985ff" });
+  res.json(row?.value || { name: "GOD Subconsole", accent: "#3985ff" });
 });
 api.get("/integration", async (req, res) => {
   res.json(integrationSummary());
 });
-api.put("/admin/integration", requireOwner, requireMfa, async (req, res) => {
+api.put("/admin/integration", requireOwner,  async (req, res) => {
   const b = z.object({ server: idSchema, key: z.string().regex(/^ptlc_[a-zA-Z0-9]+$/).max(256).optional() }).parse(req.body);
   const result = await saveIntegration(b.server, b.key);
   await db.update(users).set({ servers: [...new Set([...req.user.servers, result.server])] }).where(eq(users.id, req.user.id));
@@ -778,7 +895,7 @@ api.get("/admin/health", requireOwner, async (_req, res) => {
     uptime: Math.floor(process.uptime()),
   });
 });
-api.post("/admin/invite", requireOwner, requireMfa, async (req, res) => {
+api.post("/admin/invite", requireOwner,  async (req, res) => {
   const b = z
     .object({
       email: z.email().transform((x) => x.toLowerCase()),
@@ -809,7 +926,7 @@ api.post("/admin/invite", requireOwner, requireMfa, async (req, res) => {
       "Invitation expires in 24 hours. Share it privately with the invited user.",
   });
 });
-api.patch("/admin/users/:user", requireOwner, requireMfa, async (req, res) => {
+api.patch("/admin/users/:user", requireOwner,  async (req, res) => {
   const b = z
     .object({
       suspended: z.boolean().optional(),
@@ -841,7 +958,7 @@ api.patch("/admin/users/:user", requireOwner, requireMfa, async (req, res) => {
   await auditEvent(req.user.id, "user.permissions.update", null);
   res.json({ ok: true });
 });
-api.put("/admin/branding", requireOwner, requireMfa, async (req, res) => {
+api.put("/admin/branding", requireOwner,  async (req, res) => {
   const b = z
     .object({
       name: z.string().min(1).max(40),

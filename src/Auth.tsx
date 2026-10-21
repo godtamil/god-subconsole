@@ -40,7 +40,7 @@ export default function Auth({ onLogin }: { onLogin: (user: any) => void }) {
         setCsrf(r.csrf);
         window.dispatchEvent(new Event("god:entry"));
         if (!matchMedia("(prefers-reduced-motion: reduce)").matches)
-          await new Promise(resolve => setTimeout(resolve, 650));
+          await new Promise(resolve => setTimeout(resolve, 480));
         history.replaceState(null, "", location.pathname);
         onLogin(r.user);
       } else {
@@ -58,7 +58,7 @@ export default function Auth({ onLogin }: { onLogin: (user: any) => void }) {
       <div className="auth-brand">
         <Logo />
         <div>
-          GOD <b>SUBCONSOLE</b>
+          GOD <b>Subconsole</b>
           <small>YOUR WORLD. YOUR CONTROL.</small>
         </div>
       </div>
@@ -90,6 +90,7 @@ export default function Auth({ onLogin }: { onLogin: (user: any) => void }) {
           <div className="lion-stage" aria-hidden="true">
             <div className="lion-orbit" />
             <img src="/god-smp.png" alt="" />
+            <div className="block-guardian"><i className="guardian-head"><b/><b/></i><i className="guardian-body"/><i className="guardian-arm left"/><i className="guardian-arm right"/><i className="guardian-leg left"/><i className="guardian-leg right"/></div>
             <span className="lion-caption">YOUR KINGDOM. YOUR CONSOLE.</span>
           </div>
           <div className="auth-trust">
@@ -145,7 +146,7 @@ export default function Auth({ onLogin }: { onLogin: (user: any) => void }) {
                 ? ownerSetup
                   ? "Set up the first owner for this website. If you already signed up, enter that email and its current password."
                   : "Create your invited account to continue."
-                : status?.sharedControl ? "Create an account and step into your shared server workspace." : "Join GOD SUBCONSOLE. Server access requires owner approval."
+                : status?.sharedControl ? "Create an account and step into your shared server workspace." : "Join GOD Subconsole. Server access requires owner approval."
               : "Your server is one sign-in away."}
           </p>
           {status?.setupRequired && !status?.sharedControl && mode === "login" && (
@@ -169,11 +170,11 @@ export default function Auth({ onLogin }: { onLogin: (user: any) => void }) {
             )}
             {mode !== "reset" && (
               <label>
-                Email address
+                {mode === "login" ? "Email or display name" : "Email address"}
                 <input
                   name="email"
-                  type="email"
-                  placeholder="you@example.com"
+                  type={mode === "login" ? "text" : "email"}
+                  placeholder={mode === "login" ? "Email or unique display name" : "you@example.com"}
                   autoComplete="username"
                   required
                 />
@@ -210,17 +211,6 @@ export default function Auth({ onLogin }: { onLogin: (user: any) => void }) {
                   maxLength={128}
                   placeholder="Re-enter your password"
                   required
-                />
-              </label>
-            )}
-            {(mode === "login" || (ownerSetup && mode === "register")) && (
-              <label>
-                Authenticator or recovery code{" "}
-                <span className="muted">if enabled</span>
-                <input
-                  name="code"
-                  autoComplete="one-time-code"
-                  placeholder="6-digit code"
                 />
               </label>
             )}
@@ -287,7 +277,7 @@ export default function Auth({ onLogin }: { onLogin: (user: any) => void }) {
         </section>
       </div>
       <footer className="auth-footer">
-        GOD SUBCONSOLE <span>Crafted for control.</span>
+        GOD Subconsole <span>Crafted for control.</span>
       </footer>
     </div>
   );

@@ -17,15 +17,29 @@ import { allowed, request } from "./api";
 export type Line = { at: string; data: string };
 export function useConsole(user: any, server: string) {
   const [lines, setLines] = useState<Line[]>([]),
-    [status, setStatus] = useState("disconnected");
+    [status, setStatus] = useState("disconnected"),
+    [canCommand, setCanCommand] = useState(false),
+    [serverState, setServerState] = useState("unavailable");
   useEffect(() => {
     setLines([]);
-    if (!allowed(user, "console.read") || !server) return;
+    setCanCommand(false);
+    setServerState("unavailable");
+    if (!server) return;
+    if (!allowed(user, "console.read")) { setStatus("Console permission not granted"); return; }
     let closed = false,
       ws: WebSocket,
       timer: ReturnType<typeof setTimeout>,
       attempt = 0;
-    function connect() {
+    async function connect() {
+      setStatus("Checking console access…");
+      try {
+        const access = await request(`/servers/${server}/console-access`);
+        if (closed) return;
+        setCanCommand(!!access.canCommand);
+      } catch (reason) {
+        if (!closed) setStatus((reason as Error).message);
+        return;
+      }
       setStatus("connecting");
       ws = new WebSocket(
         `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/console-stream?server=${encodeURIComponent(server)}`,
@@ -41,12 +55,13 @@ export function useConsole(user: any, server: string) {
             setStatus(m.data);
             if (m.data === "connected") attempt = 0;
           }
+          if (m.event === "status") setServerState(String(m.data || "unavailable"));
         } catch {
           setStatus("unavailable");
         }
       };
       ws.onclose = (e) => {
-        setStatus(e.code === 1008 ? "Authorization expired" : "disconnected");
+        setStatus(e.code === 1008 ? (e.reason || "Console authorization expired") : "disconnected — reconnecting");
         if (!closed && e.code !== 1008)
           timer = setTimeout(
             connect,
@@ -55,14 +70,14 @@ export function useConsole(user: any, server: string) {
       };
       ws.onerror = () => setStatus("disconnected");
     }
-    connect();
+    void connect();
     return () => {
       closed = true;
       clearTimeout(timer);
       ws?.close();
     };
   }, [user?.id, server]);
-  return { lines, status, clear: () => setLines([]) };
+  return { lines, status, canCommand, serverState, clear: () => setLines([]) };
 }
 const plain = (s: string) =>
   s
@@ -78,12 +93,14 @@ export default function Console({
   server,
   stream,
   notify,
+  serverState,
   large = false,
 }: {
   user: any;
   server: string;
   stream: ReturnType<typeof useConsole>;
   notify: (message: string) => void;
+  serverState: string;
   large?: boolean;
 }) {
   const host = useRef<HTMLDivElement>(null),
@@ -96,7 +113,8 @@ export default function Console({
     [command, setCommand] = useState(""),
     [history, setHistory] = useState<string[]>([]),
     [historyIndex, setHistoryIndex] = useState(-1),
-    [sending, setSending] = useState(false);
+    [sending, setSending] = useState(false),
+    [commandFeedback, setCommandFeedback] = useState("");
   useEffect(() => {
     if (!host.current) return;
     const t = new Terminal({
@@ -161,7 +179,7 @@ export default function Console({
   };
   async function send(e: React.FormEvent) {
     e.preventDefault();
-    if (sending || !command.trim()) return;
+    if (sending || !command.trim() || !stream.canCommand || stream.status !== "connected" || serverState !== "running") return;
     let confirmation;
     if (/^(?:\/?(?:minecraft:)?op|lp|luckperms|pex)\b/i.test(command)) {
       confirmation = window.prompt(
@@ -170,6 +188,7 @@ export default function Console({
       if (confirmation !== "GRANT ACCESS") return;
     }
     setSending(true);
+    setCommandFeedback("Sending command to the hosting panel…");
     try {
       const r = await request(`/servers/${server}/command`, "POST", {
         command,
@@ -178,8 +197,10 @@ export default function Console({
       setHistory((prev) => [command, ...prev].slice(0, 50));
       setCommand("");
       setHistoryIndex(-1);
+      setCommandFeedback("Command accepted by the hosting panel. Check live output for the game result.");
       notify(r.message);
     } catch (e) {
+      setCommandFeedback((e as Error).message);
       notify((e as Error).message);
     } finally {
       setSending(false);
@@ -306,11 +327,11 @@ export default function Console({
         <input
           aria-label="Server command"
           placeholder={
-            allowed(user, "console.command")
+            allowed(user, "console.command") && stream.canCommand
               ? "Enter a server command…"
-              : "Arbitrary console commands are not permitted"
+              : "Commands are unavailable for this account or hosting key"
           }
-          disabled={!allowed(user, "console.command") || sending}
+          disabled={!allowed(user, "console.command") || !stream.canCommand || stream.status !== "connected" || serverState !== "running" || sending}
           value={command}
           onChange={(e) => setCommand(e.target.value)}
           onKeyDown={(e) => {
@@ -330,12 +351,18 @@ export default function Console({
         />
         <button
           disabled={
-            !command.trim() || sending || !allowed(user, "console.command")
+            !command.trim() || sending || !allowed(user, "console.command") || !stream.canCommand || stream.status !== "connected" || serverState !== "running"
           }
         >
           Send <span>↵</span>
         </button>
       </form>
+      {commandFeedback && (
+        <div className="command-feedback" role="status" aria-live="polite">
+          <span className={sending ? "command-pulse" : ""} />
+          {commandFeedback}
+        </div>
+      )}
       <div className="console-foot">
         UTF-8 <span>Read from your server · 2,000-line local buffer</span>
       </div>

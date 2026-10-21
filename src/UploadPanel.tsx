@@ -22,6 +22,7 @@ export default function UploadPanel({
     [dragging, setDragging] = useState(false),
     [autoPlugin, setAutoPlugin] = useState(true);
   const [result, setResult] = useState("");
+  const [progress,setProgress] = useState<number|null>(null);
   async function upload(files: FileList | null) {
     if (disabled || busy || !files?.length) return;
     const file = files[0],
@@ -37,22 +38,26 @@ export default function UploadPanel({
     )
       return;
     setBusy(true);
+    setProgress(0);
     setResult("");
     try {
-      const response = await fetch(
-        `/api/servers/${encodeURIComponent(server)}/files/upload?directory=${encodeURIComponent(directory)}&plugin=${plugin}`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/octet-stream",
-            "X-CSRF-Token": csrfToken,
-            "X-File-Name": encodeURIComponent(file.name),
-          },
-          body: file,
-        },
-      );
-      const data = await response.json();
-      if (!response.ok) throw Error(data.error || "Upload failed");
+      const data = await new Promise<any>((resolve,reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open("POST",`/api/servers/${encodeURIComponent(server)}/files/upload?directory=${encodeURIComponent(directory)}&plugin=${plugin}`);
+        xhr.setRequestHeader("Content-Type","application/octet-stream");
+        xhr.setRequestHeader("X-CSRF-Token",csrfToken);
+        xhr.setRequestHeader("X-File-Name",encodeURIComponent(file.name));
+        xhr.upload.onprogress = event => { if(event.lengthComputable) setProgress(Math.round(event.loaded/event.total*100)); };
+        xhr.onerror = () => reject(Error("Upload connection failed"));
+        xhr.onload = () => {
+          let payload:any;
+          try { payload = JSON.parse(xhr.responseText); }
+          catch { reject(Error("Invalid upload response")); return; }
+          if(xhr.status < 200 || xhr.status >= 300) reject(Error(payload.error || "Upload failed"));
+          else resolve(payload);
+        };
+        xhr.send(file);
+      });
       setResult(data.message);
       notify(data.message);
       onDone();
@@ -61,6 +66,7 @@ export default function UploadPanel({
       notify((e as Error).message);
     } finally {
       setBusy(false);
+      setProgress(null);
     }
   }
   return (
@@ -100,6 +106,7 @@ export default function UploadPanel({
         </span>
         <span className="upload-choose">Browse files</span>
       </button>
+      {busy && <div className="upload-progress" role="progressbar" aria-label="Upload progress" aria-valuenow={progress ?? undefined} aria-valuemin={0} aria-valuemax={100}><span style={{width:`${progress ?? 15}%`}}/></div>}
       <input
         ref={input}
         type="file"

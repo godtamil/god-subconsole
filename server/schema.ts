@@ -8,12 +8,15 @@ export const users = pgTable("users", {
   permissions: jsonb().$type<string[]>().notNull(),
   servers: jsonb().$type<string[]>().notNull(),
   suspended: boolean().notNull().default(false),
-  totp: text(),
-  pendingTotp: text("pending_totp"),
-  recovery: jsonb().$type<string[]>().notNull().default([]),
+  avatarAt: timestamp("avatar_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
     .defaultNow(),
+});
+export const profileImages = pgTable("profile_images", {
+  userId: text("user_id").primaryKey().references(() => users.id, { onDelete: "cascade" }),
+  mime: text().notNull(),
+  body: text().notNull(),
 });
 export const sessions = pgTable("sessions", {
   id: text().primaryKey(),

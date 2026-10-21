@@ -16,10 +16,13 @@ import {
 import CodeMirror from "@uiw/react-codemirror";
 import { json } from "@codemirror/lang-json";
 import { yaml } from "@codemirror/lang-yaml";
-import { request, allowed, setCsrf, csrfToken } from "./api";
+import { request, allowed, csrfToken } from "./api";
 import { Empty, Modal } from "./components";
 import UploadPanel from "./UploadPanel";
 import IntegrationPanel from "./IntegrationPanel";
+import PluginDiscovery from "./PluginDiscovery";
+import { profileImage } from "./avatar";
+import { auditLabel } from "./audit";
 import { bytes, permissionOptions, roleDefaults } from "../shared/resources";
 type Props = {
   page: string;
@@ -48,6 +51,7 @@ export default function Features({
     [saving, setSaving] = useState(false),
     [auditPage, setAuditPage] = useState(0),
     [filter, setFilter] = useState("");
+  const [sortFiles,setSortFiles] = useState("name");
   const base = `/servers/${server}`;
   useEffect(() => {
     setDirectory(page === "plugins" ? "/plugins" : "/");
@@ -131,12 +135,17 @@ export default function Features({
           action: "folder",
           path: directory + "/" + b.name,
         });
-      if (modal.type === "newFile")
+      if (modal.type === "newFile") {
         await execute(base + "/file", "PUT", {
           path: directory + "/" + b.name,
           content: "",
           create: true,
         });
+        const opened = await request(
+          base + "/file?path=" + encodeURIComponent(directory + "/" + b.name),
+        );
+        setEditor({ ...opened, name: b.name });
+      }
       if (modal.type === "fileAction")
         await execute(base + "/files/action", "POST", {
           action: modal.action,
@@ -233,31 +242,6 @@ export default function Features({
             .map((s: string) => s.trim())
             .filter(Boolean),
         });
-      }
-      if (modal.type === "totp") {
-        const r = await execute("/auth/2fa/setup", "POST", {
-          password: b.password,
-        });
-        setModal({
-          type: "totpEnable",
-          title: "Connect your authenticator",
-          secret: r.secret,
-          uri: r.uri,
-        });
-        return;
-      }
-      if (modal.type === "totpEnable") {
-        const r = await execute("/auth/2fa/enable", "POST", { code: b.code });
-        setCsrf(r.csrf);
-        onUser(r.user);
-        setModal({
-          type: "result",
-          title: "Save your recovery codes",
-          message:
-            "Store these privately. Each code can be used once. They will not be shown again.",
-          value: r.recovery.join("\n"),
-        });
-        return;
       }
       setModal(null);
     } catch {}
@@ -373,10 +357,13 @@ export default function Features({
               value={search}
               onChange={(e) => setSearch(e.target.value)}
             />
+            <select aria-label="Sort files" value={sortFiles} onChange={e=>setSortFiles(e.target.value)}>
+              <option value="name">Name</option><option value="modified">Recently modified</option><option value="size">Largest first</option>
+            </select>
             <button
               disabled={!allowed(user, "files.write")}
               onClick={() =>
-                setModal({ type: "newFile", title: "Create text file" })
+                setModal({ type: "newFile", title: "Create and edit text file" })
               }
             >
               <Plus size={14} />
@@ -394,12 +381,16 @@ export default function Features({
 <span className="tag">Drag & drop below</span>
           </div>
           <UploadPanel server={server} directory={directory} disabled={!allowed(user, "files.write")} onDone={refresh} notify={notify}/>
+          <div className="file-workspace-note">
+            <FileText size={17} /> Create a text file, edit it here, then save it directly to your server. Open folders to organize your files.
+          </div>
           <div className="table-wrap">
             <table>
               <thead>
                 <tr>
                   <th>Name</th>
                   <th>Size</th>
+                  <th>Type</th>
                   <th>Modified</th>
                   <th>Actions</th>
                 </tr>
@@ -409,11 +400,9 @@ export default function Features({
                   .filter((x: any) =>
                     x.name.toLowerCase().includes(search.toLowerCase()),
                   )
-                  .sort(
-                    (a: any, b: any) =>
-                      Number(a.is_file) - Number(b.is_file) ||
-                      a.name.localeCompare(b.name),
-                  )
+                  .sort((a: any, b: any) => Number(a.is_file) - Number(b.is_file) ||
+                    (sortFiles === "modified" ? Date.parse(b.modified_at) - Date.parse(a.modified_at) :
+                     sortFiles === "size" ? Number(b.size || 0) - Number(a.size || 0) : a.name.localeCompare(b.name)))
                   .map((item: any) => (
                     <tr key={item.name}>
                       <td>
@@ -430,9 +419,11 @@ export default function Features({
                         </button>
                       </td>
                       <td>{item.is_file ? bytes(item.size) : "Directory"}</td>
+                      <td>{item.is_file ? (item.name.split(".").at(-1)?.toUpperCase() || "File") : "Folder"}</td>
                       <td>{new Date(item.modified_at).toLocaleString()}</td>
                       <td>
                         <div className="row-actions">
+                          {item.is_file && <a className="download-link" href={`/api${base}/files/download?path=${encodeURIComponent(directory + "/" + item.name)}`} download>Download</a>}
                           {["rename", "copy", "delete"].map((action) => (
                             <button
                               key={action}
@@ -604,11 +595,18 @@ export default function Features({
                         ? new Date(x.next_run_at).toLocaleString()
                         : "Unavailable"}
                     </p>
+                    <p>Last run: {x.last_run_at ? new Date(x.last_run_at).toLocaleString() : "Not reported"} · Outcome: {x.last_run_at ? "Check server logs" : "Not available"}</p>
                     <code>
                       {x.cron?.minute} {x.cron?.hour} {x.cron?.day_of_month}{" "}
                       {x.cron?.month} {x.cron?.day_of_week}
                     </code>
                   </div>
+                  <button disabled={!allowed(user,"schedules.write") || saving} onClick={async()=>{try{await execute(base+"/schedules/"+x.id+"/execute","POST",undefined);}catch{}}}>Run now</button>
+                  <button disabled={!allowed(user,"schedules.write") || saving} onClick={async()=>{try{await execute(base+"/schedules/"+x.id,"PUT",{
+                    name:x.name,minute:x.cron?.minute,hour:x.cron?.hour,day_of_month:x.cron?.day_of_month,
+                    month:x.cron?.month,day_of_week:x.cron?.day_of_week,is_active:!x.is_active,
+                    only_when_online:!!x.only_when_online,
+                  });}catch{}}}>{x.is_active ? "Pause" : "Enable"}</button>
                   <button
                     disabled={!allowed(user, "schedules.write")}
                     onClick={() =>
@@ -841,19 +839,19 @@ export default function Features({
         </>
       )}
       {!loading && page === "plugins" && (
-        <section className="panel">
+        <><PluginDiscovery key={server + ":plugin"} server={server} user={user} kind="plugin"/><section className="panel">
           <div className="panel-title">
             <h2>Plugin library</h2>
-            <span className="tag">{list.filter((x:any)=>x.is_file && /\.jar$/i.test(x.name)).length} JAR files</span>
+            <span className="tag">{list.filter((x:any)=>x.is_file && /\.jar(?:\.disabled)?$/i.test(x.name)).length} JAR files</span>
           </div>
           <div className="panel-note">
-            Upload a plugin JAR to place it in /plugins automatically. Restart to load it.
-            Data folders are created by the plugin when it starts. Loaded status must be checked in the console.
+            Upload a plugin JAR to /plugins. Switch installed JAR files on or off below; restart to apply changes.
+            Data folders are created by the plugin when it starts. Loaded status is shown in server logs.
           </div>
           <UploadPanel server={server} plugins disabled={!allowed(user,"files.write")} onDone={refresh} notify={notify}/>
           <div className="plugin-grid">
           {list
-            .filter((x: any) => x.is_file && /\.jar$/i.test(x.name))
+            .filter((x: any) => x.is_file && /\.jar(?:\.disabled)?$/i.test(x.name))
             .map((x: any) => (
               <div className="plugin-tile" key={x.name}>
                 <FileText size={20} />
@@ -863,15 +861,31 @@ export default function Features({
                     {bytes(x.size)} · {new Date(x.modified_at).toLocaleString()}
                   </p>
                 </div>
-                <span className="tag">On disk · load status unknown</span>
+                <span className="tag">{x.name.endsWith(".disabled") ? "Disabled on disk" : "Enabled on disk"} · load status unknown</span>
+                <button
+                  className="plugin-switch"
+                  aria-label={`${x.name.endsWith(".disabled") ? "Enable" : "Disable"} ${x.name}`}
+                  disabled={!allowed(user, "files.write") || saving}
+                  onClick={async () => {
+                    try {
+                      await execute(base + "/plugins/toggle", "POST", {
+                        name: x.name,
+                        enabled: x.name.endsWith(".disabled"),
+                      });
+                    } catch {}
+                  }}
+                >
+                  {x.name.endsWith(".disabled") ? "Enable for next restart" : "Disable for next restart"}
+                </button>
               </div>
             ))}
           </div>
-          {!list.some((x:any)=>x.is_file && /\.jar$/i.test(x.name)) && !error && <Empty title="Your plugin library is empty">Drop a compatible plugin JAR above to get started.</Empty>}
+          {!list.some((x:any)=>x.is_file && /\.jar(?:\.disabled)?$/i.test(x.name)) && !error && <Empty title="Your plugin library is empty">Drop a compatible plugin JAR above to get started.</Empty>}
           <div className="plugin-folders"><h3>Plugin data folders</h3><p>{list.filter((x:any)=>!x.is_file).map((x:any)=>x.name).join(" · ") || "No data folders yet. Plugins create these after loading."}</p></div>
           <div className="panel-note">Create folders and edit plugin configuration in File manager → plugins. Use compatible plugins from trusted sources.</div>
-        </section>
+        </section></>
       )}
+      {!loading && page === "mods" && <PluginDiscovery key={server + ":mod"} server={server} user={user} kind="mod"/>}
       {!loading && page === "subusers" && (
         <section className="panel">
           <div className="panel-title">
@@ -952,12 +966,7 @@ export default function Features({
                     {x.name} <span className="tag">{x.role}</span>
                   </h3>
                   <p>
-                    {x.email} ·{" "}
-                    {x.suspended
-                      ? "Suspended"
-                      : x.totpEnabled
-                        ? "2FA enabled"
-                        : "2FA not enabled"}
+                    {x.email} · {x.suspended ? "Suspended" : "Active"}
                   </p>
                 </div>
                 <button
@@ -995,11 +1004,12 @@ export default function Features({
               <div className="list-row" key={x.id}>
                 <ShieldCheck size={17} />
                 <div>
-                  <h3>{x.action}</h3>
+                  <h3>{auditLabel(x.action)}</h3>
                   <p>
                     Actor {x.actor.slice(0, 8)} · {x.server || "Application"} ·{" "}
                     {new Date(x.createdAt).toLocaleString()}
                   </p>
+                  {auditLabel(x.action) !== x.action && <small title="Technical audit action">{x.action}</small>}
                 </div>
                 <span className="tag">{x.result}</span>
               </div>
@@ -1048,6 +1058,41 @@ export default function Features({
         <div className="settings-grid">
           <section className="panel padded">
             <h2>Profile</h2>
+            <div className="profile-photo-row">
+              <span className="profile-photo">
+                {profileImage(user) ? <img src={profileImage(user)} alt="Your profile" /> : user.name.slice(0, 1).toUpperCase()}
+              </span>
+              <label className="profile-photo-pick">
+                Choose profile photo
+                <input
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp"
+                  onChange={(e) => {
+                    const file = e.currentTarget.files?.[0];
+                    if (!file) return;
+                    if (!/^image\/(?:png|jpeg|webp)$/.test(file.type) || file.size > 250_000) {
+                      notify("Choose a PNG, JPEG, or WebP image under 250 KB.");
+                      return;
+                    }
+                    const reader = new FileReader();
+                    reader.onload = async () => {
+                      try {
+                        const result = await request("/auth/avatar", "POST", {dataUrl:String(reader.result)});
+                        onUser({ ...user, avatarAt:result.avatarAt });
+                        notify(result.message);
+                      } catch (error) { notify((error as Error).message); }
+                    };
+                    reader.readAsDataURL(file);
+                    e.currentTarget.value = "";
+                  }}
+                />
+              </label>
+              {user.avatarAt && <button onClick={async () => {
+                try { const result = await request("/auth/avatar", "DELETE"); onUser({...user,avatarAt:null}); notify(result.message); }
+                catch(error) { notify((error as Error).message); }
+              }}>Remove photo</button>}
+              <small>Saved to your account. PNG, JPEG, or WebP · 250 KB max.</small>
+            </div>
             <form
               onSubmit={async (e) => {
                 e.preventDefault();
@@ -1067,27 +1112,6 @@ export default function Features({
                 Save profile
               </button>
             </form>
-          </section>
-          <section className="panel padded">
-            <h2>Two-factor authentication</h2>
-            <p>
-              {user.totpEnabled
-                ? "Your account is protected by an authenticator."
-                : "Owner and admin management changes require two-factor authentication."}
-            </p>
-            <button
-              className="primary"
-              disabled={user.totpEnabled}
-              onClick={() =>
-                setModal({
-                  type: "totp",
-                  title: "Set up two-factor authentication",
-                })
-              }
-            >
-              <ShieldCheck size={16} />
-              {user.totpEnabled ? "Enabled" : "Set up authenticator"}
-            </button>
           </section>
           <section className="panel padded">
             <h2>Change password</h2>
@@ -1225,7 +1249,7 @@ export default function Features({
                   } catch {}
                 }}
               >
-                {field("Console name", "name", data?.name || "GOD SUBCONSOLE")}
+                {field("Console name", "name", data?.name || "GOD Subconsole")}
                 {field(
                   "Accent color",
                   "accent",
@@ -1497,19 +1521,6 @@ export default function Features({
                     console.command allows arbitrary commands, including
                     granting operator access.
                   </div>
-                </>
-              )}
-              {modal.type === "totp" &&
-                field("Confirm password", "password", "", "password")}
-              {modal.type === "totpEnable" && (
-                <>
-                  <p>
-                    Enter this setup key in your authenticator, then enter its
-                    current code.
-                  </p>
-                  <code className="setup-key">{modal.secret}</code>
-                  <a href={modal.uri}>Open authenticator</a>
-                  {field("6-digit authenticator code", "code")}
                 </>
               )}
               <div className="dialog-actions">

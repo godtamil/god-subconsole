@@ -1,4 +1,8 @@
-# GOD SUBCONSOLE
+# GOD Subconsole
+
+After sign-in, GOD Servers lists the servers assigned to the account. Choose **Manage Server** to open a server-specific dashboard URL; returning to the root URL shows the selector again. Live status, RAM and disk figures are fetched from the authenticated hosting API.
+
+Sign in with the account email or a unique display name and password. If two accounts share the same display name, use the email address. Existing authenticator and recovery-code data is removed by migration `0003_remove_two_factor.sql`; no OTP is required. Password checks, sessions, reset, rate limits, and account permissions remain in place.
 
 A runnable React/TypeScript Minecraft dashboard with Midnight Bubble glass styling, click-pop effects, optional interface sound, an authenticated WebSocket relay and PostgreSQL-compatible storage. See [the current edition guide](docs/MIDNIGHT-BUBBLE.md) for shared access, plugins and integration settings.
 
@@ -14,7 +18,7 @@ notepad .env
 npm start
 ```
 
-Set `PTERODACTYL_CLIENT_API_KEY` in the local `.env` editor, or use the administrator's Settings → Hosting connection form after enabling two-factor authentication. The ZIP contains placeholders only. Never put the key in frontend code or a public repository. `setup.ps1` creates random session and encryption secrets and preserves an existing `.env`.
+Set `PTERODACTYL_CLIENT_API_KEY` in the local `.env` editor, or use the site owner's Settings → Hosting connection form. The ZIP contains placeholders only. Never put the key in frontend code or a public repository. `setup.ps1` creates random session and encryption secrets and preserves an existing `.env`.
 
 Open [http://localhost:3100](http://localhost:3100). With the app running, open a second terminal in the project folder:
 
@@ -22,7 +26,7 @@ Open [http://localhost:3100](http://localhost:3100). With the app running, open 
 npm run bootstrap
 ```
 
-Open the one-time setup link printed by that command and choose your owner email, name, and password. The link expires after 15 minutes. There are no default admin credentials. The command works even if regular users have already signed up. Enable your authenticator from Account before making owner/admin management changes. Save the recovery codes privately.
+Open the one-time setup link printed by that command and choose your owner email, name, and password. The link expires after 15 minutes. There are no default admin credentials. The command works even if regular users have already signed up.
 
 Manual alternative: copy `.env.example` to `.env`, replace both secret placeholders with independent random values of at least 32 characters, configure the API key, then run `npm ci`, `npm run build`, and `npm start`.
 
@@ -64,7 +68,7 @@ Panel redirects are refused. DNS destinations are checked at connection time aga
 
 ## Implemented workspace
 
-Server discovery/switching; resource summary/history; copyable custom join address; confirmed start/stop/restart/force-stop requests; ANSI console, search/pause/autoscroll/history/log export/fullscreen; directory browsing; text/config editor with JSON/YAML highlighting; upload, download of opened text, file/folder creation, rename/move/copy/delete; backup creation/restore/delete and protected streamed backup downloads; schedule creation/edit/delete and task creation/edit/delete; read-only allocations; startup variables; server naming; hosting-subuser management; observed plugin JAR files; approved Minecraft command templates; accounts/passwords/sessions/2FA/recovery; invitations/permissions/suspension; audit list/filter/pagination; environment-based integration configuration; branding name/color; notifications and health.
+Server discovery/switching; resource summary/history; copyable custom join address; provider-backed start/stop/restart/force-stop requests; ANSI console, search/pause/autoscroll/history/log export/fullscreen; directory browsing and sorting; text/config editor with JSON/YAML highlighting; upload with progress, protected binary download, file/folder creation, rename/move/copy/delete; backup creation/restore/delete and protected streamed backup downloads; schedule creation/edit/run/pause/delete and task creation/edit/delete; read-only allocations; startup variables; server naming; hosting-subuser management; observed and switchable plugin JAR files; official Modrinth plugin discovery; approved Minecraft command templates; accounts/passwords/sessions/password reset and database-backed profile images; invitations/permissions/suspension; audit list/filter/pagination; environment-based integration configuration; branding name/color; notifications and health.
 
 ## Configuration and feature limits
 
@@ -95,7 +99,7 @@ Use a persistent Node.js 24 process/VM/container and PostgreSQL 17+, behind an H
 2. Set `APP_URL=https://your-console-domain`, `NODE_ENV=production`, unique session/encryption secrets, panel credentials, allowed Wings hostnames, and optional SMTP settings.
 3. Run `npm ci`, `npm run migrate`, `npm run build`, then supervise `npm start`. The application listens on loopback port 3100 by default. The reverse proxy must run on the same host or use `HOST` to bind an appropriate private interface.
 4. Preserve the exact public `Origin` header and forward WebSocket upgrades for `/console-stream`. Use a long proxy read timeout (e.g. 3600s). Forward normal `/api` and static requests to the same process. Terminate TLS at the proxy. Do not expose the PostgreSQL service publicly.
-5. Create the owner with the local bootstrap command, enable 2FA, and explicitly assign users/permissions. Keep the app single-process unless you replace its process-local rate limits, action locks, and connection counts with shared coordination.
+5. Create the owner with the local bootstrap command and explicitly assign users/permissions. Keep the app single-process unless you replace its process-local rate limits, action locks, and connection counts with shared coordination.
 
 Back up PostgreSQL with `pg_dump` on a scheduled server-side job and test `pg_restore` in an isolated database. Store encrypted secrets separately and back up the encryption/session keys securely. For embedded development data, stop the application before copying `.data/postgres`. Database migrations are in `migrations/`; never edit an applied migration in place. Production PostgreSQL, SMTP delivery, reverse proxy deployment, and live mutations require deployment-specific verification.
 

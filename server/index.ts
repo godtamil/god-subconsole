@@ -29,8 +29,8 @@ if (existsSync("dist/index.html")) {
 const cleanup = setInterval(() => cleanupAuth().catch(() => {}), 3600000);
 cleanup.unref();
 server.listen(config.port, config.host, () => {
-  console.log(`GOD SUBCONSOLE listening on ${config.host}:${config.port}`);
-  console.log(`GOD SUBCONSOLE running at ${config.app}`);
+  console.log(`GOD Subconsole listening on ${config.host}:${config.port}`);
+  console.log(`GOD Subconsole running at ${config.app}`);
 });
 async function shutdown() {
   clearInterval(cleanup);

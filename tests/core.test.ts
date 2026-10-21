@@ -40,6 +40,8 @@ vi.mock("../server/panel", async () => {
     })),
     sanitizeDetails: (d: any) => d.attributes,
     externalFetch: vi.fn(async () => new Response("", {status:200})),
+    publicLookup: (_hostname: string, _options: unknown, callback: (error: null, address: string, family: number) => void) => callback(null, "1.1.1.1", 4),
+    validateDestination: vi.fn(async () => undefined),
   };
 });
 const { db, migrate, closeDb } = await import("../server/db");
@@ -135,8 +137,9 @@ describe("shared server control and integration privacy", () => {
     config.sharedControl=true;
     try {
       vi.mocked(panel).mockClear();
-      vi.mocked(panel).mockResolvedValueOnce({data:[]}).mockResolvedValueOnce({ok:true})
-        .mockResolvedValueOnce({data:[]}).mockResolvedValueOnce({attributes:{url:"https://paid-1.pulikesiyt.fun/upload"}});
+      vi.mocked(panel).mockResolvedValueOnce({data:[]}).mockResolvedValueOnce({data:[]})
+        .mockResolvedValueOnce({ok:true}).mockResolvedValueOnce({data:[]})
+        .mockResolvedValueOnce({attributes:{url:"https://paid-1.pulikesiyt.fun/upload"}});
       const r = await http.post("/api/servers/9846e0b6/files/upload?plugin=true")
         .set("Cookie",viewerCookie).set("Origin",config.app).set("X-CSRF-Token",viewerCsrf)
         .set("Content-Type","application/octet-stream").set("X-File-Name","Example.jar")
@@ -163,6 +166,7 @@ describe("shared server control and integration privacy", () => {
     try {
       vi.mocked(panel).mockClear();vi.mocked(externalFetch).mockClear();
       vi.mocked(panel).mockResolvedValueOnce({data:[{attributes:{name:"plugins",is_file:false}}]})
+        .mockResolvedValueOnce({data:[{attributes:{name:"plugins",is_file:false}}]})
         .mockResolvedValueOnce({data:[{attributes:{name:"Existing.jar",is_file:true}}]});
       const r = await http.post("/api/servers/9846e0b6/files/upload?plugin=true")
         .set("Cookie",viewerCookie).set("Origin",config.app).set("X-CSRF-Token",viewerCsrf)
@@ -171,6 +175,68 @@ describe("shared server control and integration privacy", () => {
       expect(r.status).toBe(409);expect(externalFetch).not.toHaveBeenCalled();
       expect(panel).not.toHaveBeenCalledWith(expect.stringContaining("create-folder"),expect.anything(),expect.anything());
     } finally {config.sharedControl=false;}
+  });
+  it("switches a plugin by renaming its JAR and refuses name collisions", async () => {
+    config.sharedControl = true;
+    try {
+      vi.mocked(panel).mockClear();
+      vi.mocked(panel).mockResolvedValueOnce({data:[{attributes:{name:"plugins",is_file:false}}]})
+        .mockResolvedValueOnce({data:[{attributes:{name:"Example.jar",is_file:true}}]})
+        .mockResolvedValueOnce({data:[{attributes:{name:"Example.jar",is_file:true}}]});
+      const disabled = await http.post("/api/servers/9846e0b6/plugins/toggle")
+        .set("Cookie",viewerCookie).set("Origin",config.app).set("X-CSRF-Token",viewerCsrf)
+        .send({name:"Example.jar",enabled:false});
+      expect(disabled.status).toBe(200);
+      expect(panel).toHaveBeenCalledWith("/servers/9846e0b6/files/rename","PUT",{
+        root:"/plugins",files:[{from:"Example.jar",to:"Example.jar.disabled"}],
+      });
+      vi.mocked(panel).mockClear();
+      vi.mocked(panel).mockResolvedValueOnce({data:[{attributes:{name:"plugins",is_file:false}}]})
+        .mockResolvedValueOnce({data:[{attributes:{name:"Example.jar.disabled",is_file:true}}]})
+        .mockResolvedValueOnce({data:[
+        {attributes:{name:"Example.jar.disabled",is_file:true}},
+        {attributes:{name:"Example.jar",is_file:true}},
+      ]});
+      const collision = await http.post("/api/servers/9846e0b6/plugins/toggle")
+        .set("Cookie",viewerCookie).set("Origin",config.app).set("X-CSRF-Token",viewerCsrf)
+        .send({name:"Example.jar.disabled",enabled:true});
+      expect(collision.status).toBe(409);
+      expect(panel).not.toHaveBeenCalledWith(expect.stringContaining("/files/rename"),expect.anything(),expect.anything());
+    } finally { config.sharedControl = false; }
+  });
+});
+describe("account photo and verified server actions", () => {
+  it("persists a valid profile photo and removes it for the same account", async () => {
+    const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL/nwAAAABJRU5ErkJggg==";
+    const uploaded = await http.post("/api/auth/avatar").set("Cookie",viewerCookie)
+      .set("Origin",config.app).set("X-CSRF-Token",viewerCsrf)
+      .send({dataUrl:"data:image/png;base64,"+png});
+    expect(uploaded.status).toBe(200);
+    expect(uploaded.body.avatarAt).toBeTruthy();
+    const image = await http.get("/api/auth/avatar").set("Cookie",viewerCookie);
+    expect(image.status).toBe(200);
+    expect(image.headers["content-type"]).toContain("image/png");
+    const removed = await http.delete("/api/auth/avatar").set("Cookie",viewerCookie)
+      .set("Origin",config.app).set("X-CSRF-Token",viewerCsrf);
+    expect(removed.status).toBe(200);
+    expect((await http.get("/api/auth/avatar").set("Cookie",viewerCookie)).status).toBe(404);
+    const invalid = await http.post("/api/auth/avatar").set("Cookie",viewerCookie)
+      .set("Origin",config.app).set("X-CSRF-Token",viewerCsrf)
+      .send({dataUrl:"data:image/png;base64,"+Buffer.from("not an image").toString("base64")});
+    expect(invalid.status).toBe(400);
+  });
+  it("executes a schedule through the hosting API and rejects a traversing download path", async () => {
+    config.sharedControl = true;
+    try {
+      vi.mocked(panel).mockClear();
+      const run = await http.post("/api/servers/9846e0b6/schedules/7/execute")
+        .set("Cookie",viewerCookie).set("Origin",config.app).set("X-CSRF-Token",viewerCsrf);
+      expect(run.status).toBe(202);
+      expect(panel).toHaveBeenCalledWith("/servers/9846e0b6/schedules/7/execute","POST");
+      const unsafe = await http.get("/api/servers/9846e0b6/files/download?path=%2F..%2Fsecret")
+        .set("Cookie",viewerCookie);
+      expect(unsafe.status).toBe(400);
+    } finally { config.sharedControl = false; }
   });
 });
 describe("public account creation", () => {
@@ -277,11 +343,11 @@ describe("authentication and authorization", () => {
     const r = await http
       .post("/api/auth/login")
       .set("Origin", config.app)
-      .send({ email: "viewer@example.test", password });
+      .send({ email: "vIeWeR", password });
     expect(r.status).toBe(200);
     expect(String(r.headers["set-cookie"])).toContain("HttpOnly");
     expect(String(r.headers["set-cookie"])).toContain("SameSite=Strict");
-    expect(JSON.stringify(r.body)).not.toMatch(/ptlc_|password|pendingTotp/);
+    expect(JSON.stringify(r.body)).not.toMatch(/ptlc_|password|recovery/);
   });
   it("requires exact origin for sign-in", async () =>
     expect(
@@ -335,7 +401,7 @@ describe("authentication and authorization", () => {
     expect(r.status).toBe(403);
     expect(panel).not.toHaveBeenCalled();
   });
-  it("denies owner management mutations until 2FA is enabled", async () =>
+  it("allows a signed-in owner to manage a permitted server without an OTP", async () =>
     expect(
       (
         await http
@@ -345,7 +411,34 @@ describe("authentication and authorization", () => {
           .set("X-CSRF-Token", ownerCsrf)
           .send({ signal: "start" })
       ).status,
-    ).toBe(403));
+    ).toBe(200));
+  it("checks console permission before connecting or accepting commands", async () => {
+    expect((await http.get("/api/servers/9846e0b6/console-access").set("Cookie", viewerCookie)).status).toBe(403);
+    const access = await http.get("/api/servers/9846e0b6/console-access").set("Cookie", ownerCookie);
+    expect(access.status).toBe(200);
+    expect(access.body.canCommand).toBe(true);
+    const denied = await http.post("/api/servers/9846e0b6/command").set("Cookie", viewerCookie)
+      .set("Origin", config.app).set("X-CSRF-Token", viewerCsrf).send({ command: "list" });
+    expect(denied.status).toBe(403);
+    const accepted = await http.post("/api/servers/9846e0b6/command").set("Cookie", ownerCookie)
+      .set("Origin", config.app).set("X-CSRF-Token", ownerCsrf).send({ command: "list" });
+    expect(accepted.status).toBe(200);
+    expect(vi.mocked(panel)).toHaveBeenCalledWith("/servers/9846e0b6/command", "POST", { command: "list" });
+  });
+  it("rejects cross-server addon installs before a download begins", async () => {
+    const response = await http.post("/api/servers/unassigned/addons/install").set("Cookie", ownerCookie)
+      .set("Origin", config.app).set("X-CSRF-Token", ownerCsrf)
+      .send({ kind: "plugin", projectId: "test-project", versionId: "test-version" });
+    expect(response.status).toBe(403);
+  });
+  it("does not expose the removed authenticator setup endpoint", async () => {
+    const r = await http.post("/api/auth/2fa/setup")
+      .set("Cookie", ownerCookie)
+      .set("Origin", config.app)
+      .set("X-CSRF-Token", ownerCsrf)
+      .send({ password });
+    expect(r.status).toBe(404);
+  });
   it("requires an invitation to register", async () =>
     expect(
       (
@@ -429,12 +522,17 @@ describe("sensitive data and file policies", () => {
       ).status,
     ).toBe(400));
   it("blocks secret-bearing file contents", async () => {
-    vi.mocked(panel).mockResolvedValueOnce("password: superprivate");
+    vi.mocked(panel).mockResolvedValueOnce({data:[]}).mockResolvedValueOnce("password: superprivate");
     const r = await http
       .get("/api/servers/9846e0b6/file?path=/config.yml")
       .set("Cookie", ownerCookie);
     expect(r.status).toBe(403);
     expect(JSON.stringify(r.body)).not.toContain("superprivate");
+  });
+  it("refuses a provider-reported symlink before browsing it", async () => {
+    vi.mocked(panel).mockResolvedValueOnce({data:[{attributes:{name:"linked",is_symlink:true,is_file:false}}]});
+    const result = await http.get("/api/servers/9846e0b6/files?directory=%2Flinked").set("Cookie",ownerCookie);
+    expect(result.status).toBe(403);
   });
   it("does not treat global owner status as a server assignment", () =>
     expect(
